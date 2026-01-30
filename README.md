@@ -24,46 +24,59 @@
 1. LED基板(2)とボード(1)を、ケーブル(3)でFig1のようにはんだ付けして接続します。ケーブルの対応関係を間違えないように注意してください。このとき、ボード(1)側は、ケーブルを横側に引き出し、はんだづけ箇所がなるべく平坦になるようにします。
 1. コネクタ基板(4)に、4p/2mmピンソケット(5)を2個、傾かないように注意してはんだ付けし、足をなるべく短くカットします。（Fig2）
 1. ボード(1)にコネクタ基板(4)を差し込み、Fig3のように筐体(6）にはめます。ケーブル(3)は、図のように上面基板に重ならないようにします。
-1. ATOMシリーズを、コネクタ基板(4)の反対側にさしこみ、M2ねじ(7)でFig3のように固定します。
-1. 黒い筐体(8)を筐体(6)（向きに注意）に、4個のタッピングねじ(9)でFig4のように固定します。
-1. 筐体(9)に、LED基板(2)をFig5のようにはめ、黒い筐体(10)（向きに注意）を、4個のタッピングねじ(9)でFig6のように固定します。
-1. Fig7のように、ばね(10)を筐体(9)にはめ、その後、Fig8のように、ばね(10)を反対側の筐体(6)にはめつつ、2つの筐体を押し込んではめこみます。
-1. ATOMシリーズにプログラムを書き込み、ボード(1)が動作すると、Fig9のように上下両側のLEDが点灯します。
+# VASC-LAB 100Hz PMDT System
 
-Fig1.:<img src="https://github.com/akita11/PPGclip/blob/main/images/1.jpg" width="240px">
+**Perceptual Micro-Decision Task (PMDT) with 100Hz Physiological Streaming**
 
-Fig2:<img src="https://github.com/akita11/PPGclip/blob/main/images/2.jpg" width="240px">
+This system connects a raw physiological sensor stream (M5Atom S3) to a high-performance Rust/WASM frontend to study the interaction between physiological arousal and micro-decision making.
 
-Fig3:<img src="https://github.com/akita11/PPGclip/blob/main/images/3.jpg" width="240px">
+## System Architecture
 
-Fig4:<img src="https://github.com/akita11/PPGclip/blob/main/images/4.jpg" width="240px">
+1.  **Firmware (M5Atom S3)**
+    *   Streams raw IR/Red sensor data at 100Hz.
+    *   Transmits filtered "Teacher's Waveform" for visual feedback.
+    *   (Source code not included / proprietary).
 
-Fig5:<img src="https://github.com/akita11/PPGclip/blob/main/images/5.jpg" width="240px">
+2.  **Relay Server (Python)**
+    *   Bridges Serial Port (USB) to WebSocket.
+    *   Logs high-precision physiological data to `data/session_*.csv`.
+    *   Logs experimental event data to `data/events_*.csv`.
 
-Fig6:<img src="https://github.com/akita11/PPGclip/blob/main/images/6.jpg" width="240px">
+3.  **Frontend (Rust / Leptos / WASM)**
+    *   **PMDT Task**: Continuous binary micro-decision task (Visual Density Discrimination).
+    *   **Dynamics**:
+        *   **Threat Frame**: High physiological arousal -> Visual noise increases, timeout decreases.
+        *   **Challenge Frame**: High physiological arousal -> Visual clarity increases, timeout increases.
+    *   **Signal Processing**: 100Hz real-time filtering and `r(t)` (Vascular Tone) calculation in WASM.
 
-Fig7:<img src="https://github.com/akita11/PPGclip/blob/main/images/7.jpg" width="240px">
+## Usage
 
-Fig8:<img src="https://github.com/akita11/PPGclip/blob/main/images/8.jpg" width="240px">
+### 1. Start Relay Server
+Connect M5Atom via USB.
 
-Fig9:<img src="https://github.com/akita11/PPGclip/blob/main/images/9.jpg" width="240px">
+```bash
+cd relay_server
+python relay_server.py
+```
 
+### 2. Start Frontend
+Required: `trunk` (Rust WASM bundler).
 
-# ソフトウエア
+```bash
+cd frontend
+trunk serve
+```
+Open `http://localhost:8080`.
 
-M5Stack社の心拍センサユニット用のプログラムはすべて利用できます。サンプルとして、以下の機能をもつATOMS3用のプログラムがsampleFW/内にあります。
-- 波形表示(100Hzサンプリング)
-- ベースライン変動除去
-- 簡易な正常計測チェック（正常計測時は緑色のグラフ）
-- ボタンを押すと10秒分の生データをUSU UARTにCSV形式で出力
+## Controls
 
+*   **SPACE**: Start Session.
+*   **A**: Choose Left (Higher Density).
+*   **L**: Choose Right (Higher Density).
+*   **Debug Keys**:
+    *   `1`: Neutral Frame
+    *   `2`: Threat Frame
+    *   `3`: Challenge Frame
 
-## Author
-
-Junichi Akita (@akita11) / akita@ifdl.jp
-
-
-
-
-
-
+## License
+Private / Confidential - Do not publish without permission.
