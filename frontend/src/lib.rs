@@ -1,5 +1,7 @@
 mod pmdt;
+mod signal_processor;
 use pmdt::{PmdtEngine, TrialState, Frame};
+use signal_processor::SignalProcessor;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -43,6 +45,12 @@ pub fn App() -> impl IntoView {
         if key == "1" { eng.frame = Frame::Neutral; }
         else if key == "2" { eng.frame = Frame::Threat; }
         else if key == "3" { eng.frame = Frame::Challenge; }
+        else if key == "c" || key == "C" { 
+            // Trigger Calibration in Processor
+             let mut proc = processor.borrow_mut();
+             proc.calibrate();
+             web_sys::console::log_1(&"Calibrated Baseline".into());
+        }
         
         if eng.state == TrialState::Idle && key == " " {
              eng.start_session(ts);
