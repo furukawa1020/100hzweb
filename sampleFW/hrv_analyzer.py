@@ -534,16 +534,22 @@ class LiveMonitor:
         self.in_data_mode = False
         
     def parse_csv_line(self, line):
-        """CSVデータ行をパース"""
+        """CSVデータ行をパース（連続モード対応）"""
         try:
+            # ヘッダー行や空行をスキップ
+            if not line or line.startswith('#') or 'Index' in line or 'Buffer' in line:
+                return None
+            
             parts = line.strip().split(',')
-            if len(parts) == 6:
+            if len(parts) >= 6:
+                # タイムスタンプを連続的に生成（ms単位）
+                timestamp = int(time.time() * 1000) % 100000  # 0-99999でループ
                 return {
-                    'timestamp': int(parts[1]),
-                    'red': int(parts[2]),
-                    'ir': int(parts[3]),
-                    'filt_red': float(parts[4]),
-                    'filt_ir': float(parts[5])
+                    'timestamp': timestamp,
+                    'red': int(parts[2]) if parts[2].isdigit() else 0,
+                    'ir': int(parts[3]) if parts[3].isdigit() else 0,
+                    'filt_red': float(parts[4]) if parts[4].replace('.', '').replace('-', '').isdigit() else 0.0,
+                    'filt_ir': float(parts[5]) if parts[5].replace('.', '').replace('-', '').isdigit() else 0.0
                 }
         except:
             pass
@@ -608,8 +614,11 @@ class LiveMonitor:
             self.db.close()
     
     def _serial_reader_thread(self):
-        """シリアルポート読み取り専用スレッド"""
+        """シリアルポート読み取り専用スレッド（連続モード）"""
         try:
+            # スレッド内でセッション番号だけ保持（DB操作はメインスレッドで）
+            print(f"\nContinuous monitoring started (no button press needed)")
+            
             while self.running:
                 if not self.ser or not self.ser.is_open:
                     time.sleep(0.1)
@@ -622,59 +631,41 @@ class LiveMonitor:
                         time.sleep(0.001)
                         continue
                     
-                    # データモード開始検出
-                    if line.startswith('# Index'):
+                    # CSVフォーマットのデータ行を処理
+                    data = self.parse_csv_line(line)
+                    if data:
                         with self.data_lock:
-                            self.in_data_mode = True
-                            self.session_id = self.db.create_session(notes='Live monitoring with plot')
-                            self.data_buffer = []
-                        print(f"\n[Session {self.session_id}] Data recording started")
-                        continue
-                    
-                    # データモード終了検出
-                    if 'Buffer cleared' in line:
-                        with self.data_lock:
-                            if self.in_data_mode and self.data_buffer:
-                                self._process_session()
-                            self.in_data_mode = False
-                        continue
-                    
-                    # データ行処理
-                    if self.in_data_mode:
-                        data = self.parse_csv_line(line)
-                        if data:
-                            with self.data_lock:
-                                self.data_buffer.append(data)
-                                self.time_buffer.append(data['timestamp'] / 1000.0)
-                                self.signal_buffer.append(data['filt_ir'])
+                            self.data_buffer.append(data)
+                            self.time_buffer.append(data['timestamp'] / 1000.0)
+                            self.signal_buffer.append(data['filt_ir'])
+                            
+                            # 100サンプルごとにHR/RMSSD計算
+                            if len(self.data_buffer) % 100 == 0 and len(self.data_buffer) >= 300:
+                                recent_data = self.data_buffer[-300:]
+                                timestamps = np.array([d['timestamp'] for d in recent_data])
+                                signal_data = np.array([d['filt_ir'] for d in recent_data])
                                 
-                                # 100サンプルごとにHR/RMSSD計算
-                                if len(self.data_buffer) % 100 == 0 and len(self.data_buffer) >= 300:
-                                    recent_data = self.data_buffer[-300:]
-                                    timestamps = np.array([d['timestamp'] for d in recent_data])
-                                    signal_data = np.array([d['filt_ir'] for d in recent_data])
-                                    
-                                    try:
-                                        std_signal = np.std(signal_data)
-                                        if std_signal > 1.0:
-                                            peaks = self.analyzer.detect_peaks(signal_data, min_distance=50, threshold=std_signal * 0.2)
+                                try:
+                                    std_signal = np.std(signal_data)
+                                    if std_signal > 1.0:
+                                        peaks = self.analyzer.detect_peaks(signal_data, min_distance=50, threshold=std_signal * 0.2)
+                                        
+                                        if len(peaks) >= 4:
+                                            rr_intervals, _ = self.analyzer.calculate_rr_intervals(peaks, timestamps)
+                                            valid_rr = rr_intervals[(rr_intervals >= 400) & (rr_intervals <= 1500)]
                                             
-                                            if len(peaks) >= 4:
-                                                rr_intervals, _ = self.analyzer.calculate_rr_intervals(peaks, timestamps)
-                                                valid_rr = rr_intervals[(rr_intervals >= 400) & (rr_intervals <= 1500)]
+                                            if len(valid_rr) >= 3:
+                                                mean_rr = np.mean(valid_rr)
+                                                hr = 60000.0 / mean_rr if mean_rr > 0 else 0
+                                                rr_diff = np.diff(valid_rr)
+                                                rmssd = np.sqrt(np.mean(rr_diff ** 2)) if len(rr_diff) > 0 else 0
                                                 
-                                                if len(valid_rr) >= 3:
-                                                    mean_rr = np.mean(valid_rr)
-                                                    hr = 60000.0 / mean_rr if mean_rr > 0 else 0
-                                                    rr_diff = np.diff(valid_rr)
-                                                    rmssd = np.sqrt(np.mean(rr_diff ** 2)) if len(rr_diff) > 0 else 0
-                                                    
-                                                    if 40 <= hr <= 120:
-                                                        self.hr_buffer.append(hr)
-                                                        self.rmssd_buffer.append(rmssd)
-                                                        print(f"HR: {hr:.1f} bpm, RMSSD: {rmssd:.1f} ms")
-                                    except:
-                                        pass
+                                                if 40 <= hr <= 120:
+                                                    self.hr_buffer.append(hr)
+                                                    self.rmssd_buffer.append(rmssd)
+                                                    print(f"HR: {hr:.1f} bpm, RMSSD: {rmssd:.1f} ms")
+                                except:
+                                    pass
                 
                 except Exception as e:
                     continue
