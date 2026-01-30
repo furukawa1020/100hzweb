@@ -643,36 +643,48 @@ class LiveMonitor:
             # データ収集とプロット更新
             in_data_mode = False
             last_hr_time = 0
+            update_counter = 0
             
             def update_plot():
-                if len(self.time_buffer) > 0:
-                    times = list(self.time_buffer)
-                    signals = list(self.signal_buffer)
+                try:
+                    if len(self.time_buffer) > 0:
+                        times = list(self.time_buffer)
+                        signals = list(self.signal_buffer)
+                        
+                        # 信号プロット更新
+                        self.lines[0].set_data(times, signals)
+                        self.axes[0].relim()
+                        self.axes[0].autoscale_view()
                     
-                    # 信号プロット更新
-                    self.lines[0].set_data(times, signals)
-                    self.axes[0].relim()
-                    self.axes[0].autoscale_view()
-                
-                if len(self.hr_buffer) > 0:
-                    # 心拍数とRMSSDプロット更新
-                    hr_times = list(range(len(self.hr_buffer)))
-                    hrs = list(self.hr_buffer)
-                    rmssds = list(self.rmssd_buffer)
+                    if len(self.hr_buffer) > 0:
+                        # 心拍数とRMSSDプロット更新
+                        hr_times = list(range(len(self.hr_buffer)))
+                        hrs = list(self.hr_buffer)
+                        rmssds = list(self.rmssd_buffer)
+                        
+                        self.lines[1].set_data(hr_times, hrs)
+                        self.axes[1].relim()
+                        self.axes[1].autoscale_view()
+                        
+                        self.lines[2].set_data(hr_times, rmssds)
+                        self.axes[2].relim()
+                        self.axes[2].autoscale_view()
                     
-                    self.lines[1].set_data(hr_times, hrs)
-                    self.lines[2].set_data(hr_times, rmssds)
-                
-                self.fig.canvas.draw()
-                self.fig.canvas.flush_events()
+                    self.fig.canvas.draw_idle()
+                    self.fig.canvas.flush_events()
+                except:
+                    pass
             
             while plt.fignum_exists(self.fig.number) and self.running:
                 try:
                     line = self.ser.readline().decode('utf-8', errors='ignore').strip()
                     
                     if not line:
-                        update_plot()
-                        plt.pause(0.01)
+                        # 10回に1回だけプロット更新（負荷軽減）
+                        update_counter += 1
+                        if update_counter % 10 == 0:
+                            update_plot()
+                        plt.pause(0.001)
                         continue
                     
                     # データモード開始検出
@@ -700,38 +712,41 @@ class LiveMonitor:
                             self.time_buffer.append(data['timestamp'] / 1000.0)
                             self.signal_buffer.append(data['filt_ir'])
                             
-                            # 50サンプルごとにHR/RMSSD計算（0.5秒ごと）
-                            if len(self.data_buffer) % 50 == 0 and len(self.data_buffer) >= 200:
-                                recent_data = self.data_buffer[-200:]
+                            # 100サンプルごとにHR/RMSSD計算（1秒ごと）
+                            if len(self.data_buffer) % 100 == 0 and len(self.data_buffer) >= 300:
+                                recent_data = self.data_buffer[-300:]
                                 timestamps = np.array([d['timestamp'] for d in recent_data])
                                 signal_data = np.array([d['filt_ir'] for d in recent_data])
                                 
                                 try:
-                                    # 簡易HRV計算（閾値を低めに設定）
-                                    peaks = self.analyzer.detect_peaks(signal_data, min_distance=40, threshold=None)
-                                    
-                                    if len(peaks) >= 3:
-                                        rr_intervals, _ = self.analyzer.calculate_rr_intervals(peaks, timestamps)
+                                    # 簡易HRV計算
+                                    std_signal = np.std(signal_data)
+                                    if std_signal > 1.0:  # 信号が存在する場合のみ
+                                        peaks = self.analyzer.detect_peaks(signal_data, min_distance=50, threshold=std_signal * 0.2)
                                         
-                                        # クリーニング条件を緩和
-                                        valid_rr = rr_intervals[(rr_intervals >= 300) & (rr_intervals <= 2000)]
-                                        
-                                        if len(valid_rr) >= 2:
-                                            mean_rr = np.mean(valid_rr)
-                                            hr = 60000.0 / mean_rr if mean_rr > 0 else 0
+                                        if len(peaks) >= 4:
+                                            rr_intervals, _ = self.analyzer.calculate_rr_intervals(peaks, timestamps)
                                             
-                                            rr_diff = np.diff(valid_rr)
-                                            rmssd = np.sqrt(np.mean(rr_diff ** 2))
+                                            # クリーニング
+                                            valid_rr = rr_intervals[(rr_intervals >= 400) & (rr_intervals <= 1500)]
                                             
-                                            self.hr_buffer.append(hr)
-                                            self.rmssd_buffer.append(rmssd)
-                                            
-                                            # デバッグ出力
-                                            print(f"HR: {hr:.1f} bpm, RMSSD: {rmssd:.1f} ms ({len(peaks)} peaks)")
+                                            if len(valid_rr) >= 3:
+                                                mean_rr = np.mean(valid_rr)
+                                                hr = 60000.0 / mean_rr if mean_rr > 0 else 0
+                                                
+                                                rr_diff = np.diff(valid_rr)
+                                                rmssd = np.sqrt(np.mean(rr_diff ** 2)) if len(rr_diff) > 0 else 0
+                                                
+                                                if 40 <= hr <= 120:  # 妥当な範囲のみ
+                                                    self.hr_buffer.append(hr)
+                                                    self.rmssd_buffer.append(rmssd)
+                                                    print(f"HR: {hr:.1f} bpm, RMSSD: {rmssd:.1f} ms")
                                 except Exception as e:
                                     pass  # エラーは無視して継続
                     
-                    update_plot()
+                    # データ受信時のみプロット更新
+                    if in_data_mode and len(self.data_buffer) % 20 == 0:
+                        update_plot()
                     
                 except Exception as e:
                     print(f"Plot error: {e}")
