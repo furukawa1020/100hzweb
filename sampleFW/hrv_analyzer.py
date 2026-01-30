@@ -537,20 +537,26 @@ class LiveMonitor:
         """CSVデータ行をパース（連続モード対応）"""
         try:
             # ヘッダー行や空行をスキップ
-            if not line or line.startswith('#') or 'Index' in line or 'Buffer' in line:
+            if not line or line.startswith('#') or 'Index' in line or 'Buffer' in line or 'ESP-ROM' in line:
                 return None
             
             parts = line.strip().split(',')
-            if len(parts) >= 6:
-                # タイムスタンプを連続的に生成（ms単位）
-                timestamp = int(time.time() * 1000) % 100000  # 0-99999でループ
-                return {
-                    'timestamp': timestamp,
-                    'red': int(parts[2]) if parts[2].isdigit() else 0,
-                    'ir': int(parts[3]) if parts[3].isdigit() else 0,
-                    'filt_red': float(parts[4]) if parts[4].replace('.', '').replace('-', '').isdigit() else 0.0,
-                    'filt_ir': float(parts[5]) if parts[5].replace('.', '').replace('-', '').isdigit() else 0.0
-                }
+            
+            # フォーマット1: Index,Timestamp,Red,IR,FiltRed,FiltIR (6要素)
+            if len(parts) == 6 and parts[0].isdigit():
+                try:
+                    return {
+                        'timestamp': int(parts[1]),
+                        'red': int(parts[2]),
+                        'ir': int(parts[3]),
+                        'filt_red': float(parts[4]),
+                        'filt_ir': float(parts[5])
+                    }
+                except:
+                    pass
+            
+            # それ以外のデータは無視
+            return None
         except:
             pass
         return None
@@ -616,8 +622,11 @@ class LiveMonitor:
     def _serial_reader_thread(self):
         """シリアルポート読み取り専用スレッド（連続モード）"""
         try:
-            # スレッド内でセッション番号だけ保持（DB操作はメインスレッドで）
-            print(f"\nContinuous monitoring started (no button press needed)")
+            print(f"\n=== Continuous monitoring mode ===")
+            print(f"Press the ATOMS3 button to start data streaming")
+            print(f"Data will be displayed continuously without needing to press again")
+            
+            in_data_stream = False
             
             while self.running:
                 if not self.ser or not self.ser.is_open:
@@ -631,46 +640,62 @@ class LiveMonitor:
                         time.sleep(0.001)
                         continue
                     
-                    # CSVフォーマットのデータ行を処理
-                    data = self.parse_csv_line(line)
-                    if data:
-                        with self.data_lock:
-                            self.data_buffer.append(data)
-                            self.time_buffer.append(data['timestamp'] / 1000.0)
-                            self.signal_buffer.append(data['filt_ir'])
-                            
-                            # 100サンプルごとにHR/RMSSD計算
-                            if len(self.data_buffer) % 100 == 0 and len(self.data_buffer) >= 300:
-                                recent_data = self.data_buffer[-300:]
-                                timestamps = np.array([d['timestamp'] for d in recent_data])
-                                signal_data = np.array([d['filt_ir'] for d in recent_data])
+                    # データストリーム開始検出
+                    if '# Index' in line:
+                        in_data_stream = True
+                        print(f"\n[Data streaming started - graphs will update continuously]")
+                        continue
+                    
+                    # データストリーム継続中のみ処理
+                    if in_data_stream:
+                        # "Buffer cleared"でストリーム終了を検出するが、継続フラグは保持
+                        if 'Buffer cleared' in line:
+                            print(f"\n[One cycle complete - ready for next button press]")
+                            in_data_stream = False
+                            continue
+                        
+                        # CSVフォーマットのデータ行を処理
+                        data = self.parse_csv_line(line)
+                        if data:
+                            with self.data_lock:
+                                self.data_buffer.append(data)
+                                self.time_buffer.append(data['timestamp'] / 1000.0)
+                                self.signal_buffer.append(data['filt_ir'])
                                 
-                                try:
-                                    std_signal = np.std(signal_data)
-                                    if std_signal > 1.0:
-                                        peaks = self.analyzer.detect_peaks(signal_data, min_distance=50, threshold=std_signal * 0.2)
-                                        
-                                        if len(peaks) >= 4:
-                                            rr_intervals, _ = self.analyzer.calculate_rr_intervals(peaks, timestamps)
-                                            valid_rr = rr_intervals[(rr_intervals >= 400) & (rr_intervals <= 1500)]
+                                # 100サンプルごとにHR/RMSSD計算
+                                if len(self.data_buffer) % 100 == 0 and len(self.data_buffer) >= 300:
+                                    recent_data = self.data_buffer[-300:]
+                                    timestamps = np.array([d['timestamp'] for d in recent_data])
+                                    signal_data = np.array([d['filt_ir'] for d in recent_data])
+                                    
+                                    try:
+                                        std_signal = np.std(signal_data)
+                                        if std_signal > 1.0:
+                                            peaks = self.analyzer.detect_peaks(signal_data, min_distance=50, threshold=std_signal * 0.2)
                                             
-                                            if len(valid_rr) >= 3:
-                                                mean_rr = np.mean(valid_rr)
-                                                hr = 60000.0 / mean_rr if mean_rr > 0 else 0
-                                                rr_diff = np.diff(valid_rr)
-                                                rmssd = np.sqrt(np.mean(rr_diff ** 2)) if len(rr_diff) > 0 else 0
+                                            if len(peaks) >= 4:
+                                                rr_intervals, _ = self.analyzer.calculate_rr_intervals(peaks, timestamps)
+                                                valid_rr = rr_intervals[(rr_intervals >= 400) & (rr_intervals <= 1500)]
                                                 
-                                                if 40 <= hr <= 120:
-                                                    self.hr_buffer.append(hr)
-                                                    self.rmssd_buffer.append(rmssd)
-                                                    print(f"HR: {hr:.1f} bpm, RMSSD: {rmssd:.1f} ms")
-                                except:
-                                    pass
+                                                if len(valid_rr) >= 3:
+                                                    mean_rr = np.mean(valid_rr)
+                                                    hr = 60000.0 / mean_rr if mean_rr > 0 else 0
+                                                    rr_diff = np.diff(valid_rr)
+                                                    rmssd = np.sqrt(np.mean(rr_diff ** 2)) if len(rr_diff) > 0 else 0
+                                                    
+                                                    if 40 <= hr <= 120:
+                                                        self.hr_buffer.append(hr)
+                                                        self.rmssd_buffer.append(rmssd)
+                                                        print(f"HR: {hr:.1f} bpm, RMSSD: {rmssd:.1f} ms (samples: {len(self.data_buffer)})")
+                                    except Exception as e:
+                                        pass
                 
                 except Exception as e:
                     continue
         except Exception as e:
             print(f"Reader thread error: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _run_with_plot(self):
         """グラフ付きリアルタイムモニタリング（マルチスレッド版）"""
