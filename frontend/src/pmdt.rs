@@ -50,6 +50,10 @@ pub struct PmdtEngine {
     pub score: i32,
     pub combo: u32,
     
+    // Last Trial Stats (for Logging)
+    pub last_correct: bool,
+    pub last_rt: f64,
+    
     // Current Trial Data
     pub current_stimulus: Option<Stimulus>,
     rng: SmallRng,
@@ -73,6 +77,8 @@ impl PmdtEngine {
             
             score: 0,
             combo: 0,
+            last_correct: false,
+            last_rt: 0.0,
             current_stimulus: None,
             rng: SmallRng::seed_from_u64(seed),
             total_trials: 0,
@@ -209,6 +215,11 @@ impl PmdtEngine {
     }
 
     fn conclude_trial(&mut self, correct: bool, ts: f64) {
+        // Calculate RT
+        let rt = (ts - self.state_start_ts) * 1000.0;
+        self.last_rt = rt;
+        self.last_correct = correct;
+
         self.total_trials += 1;
         if correct {
             self.correct_count += 1;
