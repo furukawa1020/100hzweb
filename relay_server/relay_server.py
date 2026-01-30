@@ -102,10 +102,10 @@ async def serial_reader(port):
                                 "filt_red": filt_red
                             })
                             
-                            await broadcast(payload)
+                            await broadcast(json.dumps(payload_dict))
 
-                        except ValueError:
-                            pass # Malformed numbers
+                        except (ValueError, IndexError):
+                            pass # Malformed packet
             else:
                 await asyncio.sleep(0.001) # Yield slightly
                 
@@ -122,6 +122,8 @@ async def main():
         return
 
     setup_logging()
+    setup_logging()
+    setup_event_logging()
 
     # Start WebSocket Server
     async with websockets.serve(handler, "localhost", WS_PORT):

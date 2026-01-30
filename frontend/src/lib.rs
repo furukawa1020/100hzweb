@@ -62,6 +62,7 @@ pub fn App() -> impl IntoView {
 
         let processor_clone = processor.clone();
         let engine_clone = engine_loop.clone();
+        let ws_sender = ws.clone();
 
         let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |e: MessageEvent| {
             if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
@@ -83,9 +84,29 @@ pub fn App() -> impl IntoView {
                     // 2. Game Loop Update (100Hz)
                     let mut eng = engine_clone.borrow_mut();
                     
+                    // Capture state before update to detect trial completion
+                    let prev_trials = eng.total_trials;
+
                     // Dynamic Parameter Update based on r(t) and Frame
                     eng.update_parameters_based_on_frame(r_val);
                     eng.update(browser_ts);
+                    
+                    // Check for trial completion to log data (SCED)
+                    if eng.total_trials > prev_trials {
+                         // A trial finished. Send log to server.
+                         let log_msg = serde_json::json!({
+                             "type": "log_event",
+                             "event_type": "trial_result",
+                             "trial_id": eng.total_trials,
+                             "frame": format!("{:?}", eng.frame),
+                             "difficulty": eng.difficulty,
+                             "correct": eng.last_correct, // Need to expose this in PmdtEngine
+                             "rt_ms": eng.last_rt,        // Need this too
+                             "details": format!("score:{}", eng.score)
+                         });
+                         // Send via WS
+                         let _ = ws_sender.send_with_str(&log_msg.to_string());
+                    }
                     
                     // 3. UI Sync
                     set_score.set(eng.score);
