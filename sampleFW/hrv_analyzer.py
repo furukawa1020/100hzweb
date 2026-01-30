@@ -26,6 +26,8 @@ from datetime import datetime
 import argparse
 import json
 from collections import deque
+import threading
+import time
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -527,6 +529,10 @@ class LiveMonitor:
         self.ser = None
         self.running = True
         
+        # スレッド制御用
+        self.data_lock = threading.Lock()
+        self.in_data_mode = False
+        
     def parse_csv_line(self, line):
         """CSVデータ行をパース"""
         try:
@@ -601,8 +607,82 @@ class LiveMonitor:
                 ser.close()
             self.db.close()
     
+    def _serial_reader_thread(self):
+        """シリアルポート読み取り専用スレッド"""
+        try:
+            while self.running:
+                if not self.ser or not self.ser.is_open:
+                    time.sleep(0.1)
+                    continue
+                
+                try:
+                    line = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                    
+                    if not line:
+                        time.sleep(0.001)
+                        continue
+                    
+                    # データモード開始検出
+                    if line.startswith('# Index'):
+                        with self.data_lock:
+                            self.in_data_mode = True
+                            self.session_id = self.db.create_session(notes='Live monitoring with plot')
+                            self.data_buffer = []
+                        print(f"\n[Session {self.session_id}] Data recording started")
+                        continue
+                    
+                    # データモード終了検出
+                    if 'Buffer cleared' in line:
+                        with self.data_lock:
+                            if self.in_data_mode and self.data_buffer:
+                                self._process_session()
+                            self.in_data_mode = False
+                        continue
+                    
+                    # データ行処理
+                    if self.in_data_mode:
+                        data = self.parse_csv_line(line)
+                        if data:
+                            with self.data_lock:
+                                self.data_buffer.append(data)
+                                self.time_buffer.append(data['timestamp'] / 1000.0)
+                                self.signal_buffer.append(data['filt_ir'])
+                                
+                                # 100サンプルごとにHR/RMSSD計算
+                                if len(self.data_buffer) % 100 == 0 and len(self.data_buffer) >= 300:
+                                    recent_data = self.data_buffer[-300:]
+                                    timestamps = np.array([d['timestamp'] for d in recent_data])
+                                    signal_data = np.array([d['filt_ir'] for d in recent_data])
+                                    
+                                    try:
+                                        std_signal = np.std(signal_data)
+                                        if std_signal > 1.0:
+                                            peaks = self.analyzer.detect_peaks(signal_data, min_distance=50, threshold=std_signal * 0.2)
+                                            
+                                            if len(peaks) >= 4:
+                                                rr_intervals, _ = self.analyzer.calculate_rr_intervals(peaks, timestamps)
+                                                valid_rr = rr_intervals[(rr_intervals >= 400) & (rr_intervals <= 1500)]
+                                                
+                                                if len(valid_rr) >= 3:
+                                                    mean_rr = np.mean(valid_rr)
+                                                    hr = 60000.0 / mean_rr if mean_rr > 0 else 0
+                                                    rr_diff = np.diff(valid_rr)
+                                                    rmssd = np.sqrt(np.mean(rr_diff ** 2)) if len(rr_diff) > 0 else 0
+                                                    
+                                                    if 40 <= hr <= 120:
+                                                        self.hr_buffer.append(hr)
+                                                        self.rmssd_buffer.append(rmssd)
+                                                        print(f"HR: {hr:.1f} bpm, RMSSD: {rmssd:.1f} ms")
+                                    except:
+                                        pass
+                
+                except Exception as e:
+                    continue
+        except Exception as e:
+            print(f"Reader thread error: {e}")
+    
     def _run_with_plot(self):
-        """グラフ付きリアルタイムモニタリング"""
+        """グラフ付きリアルタイムモニタリング（マルチスレッド版）"""
         print(f"Connecting to {self.port}...")
         
         try:
@@ -611,146 +691,76 @@ class LiveMonitor:
             print("Close plot window to stop")
             
             # プロット初期化
-            plt.ion()
+            plt.style.use('fast')  # 高速描画モード
             self.fig, self.axes = plt.subplots(3, 1, figsize=(12, 8))
             self.fig.suptitle('PPGclip Real-time Monitor', fontsize=14)
             
-            # サブプロット1: フィルタ後信号
+            # サブプロット設定（blit用に背景を保存）
             self.axes[0].set_title('Filtered IR Signal')
             self.axes[0].set_ylabel('Amplitude')
             self.axes[0].grid(True, alpha=0.3)
-            line1, = self.axes[0].plot([], [], 'b-', linewidth=0.8)
+            line1, = self.axes[0].plot([], [], 'b-', linewidth=0.8, animated=True)
             
-            # サブプロット2: 心拍数
             self.axes[1].set_title('Heart Rate')
             self.axes[1].set_ylabel('HR (bpm)')
             self.axes[1].set_ylim(40, 120)
             self.axes[1].grid(True, alpha=0.3)
-            line2, = self.axes[1].plot([], [], 'r-', linewidth=1.5)
+            line2, = self.axes[1].plot([], [], 'r-', linewidth=1.5, animated=True)
             
-            # サブプロット3: RMSSD
             self.axes[2].set_title('RMSSD (Heart Rate Variability)')
             self.axes[2].set_xlabel('Time (s)')
             self.axes[2].set_ylabel('RMSSD (ms)')
             self.axes[2].set_ylim(0, 100)
             self.axes[2].grid(True, alpha=0.3)
-            line3, = self.axes[2].plot([], [], 'g-', linewidth=1.5)
+            line3, = self.axes[2].plot([], [], 'g-', linewidth=1.5, animated=True)
             
             self.lines = [line1, line2, line3]
             
             plt.tight_layout()
+            self.fig.canvas.draw()
             
-            # データ収集とプロット更新
-            in_data_mode = False
-            last_hr_time = 0
-            update_counter = 0
+            # 背景を保存（blitting用）
+            backgrounds = [self.fig.canvas.copy_from_bbox(ax.bbox) for ax in self.axes]
             
-            def update_plot():
+            # データ読み取りスレッド開始
+            reader_thread = threading.Thread(target=self._serial_reader_thread, daemon=True)
+            reader_thread.start()
+            
+            # アニメーション更新関数
+            def animate(frame):
                 try:
-                    if len(self.time_buffer) > 0:
-                        times = list(self.time_buffer)
-                        signals = list(self.signal_buffer)
+                    with self.data_lock:
+                        # 信号データ更新
+                        if len(self.time_buffer) > 0:
+                            times = list(self.time_buffer)
+                            signals = list(self.signal_buffer)
+                            self.lines[0].set_data(times, signals)
+                            self.axes[0].relim()
+                            self.axes[0].autoscale_view(scaley=True, scalex=True)
                         
-                        # 信号プロット更新
-                        self.lines[0].set_data(times, signals)
-                        self.axes[0].relim()
-                        self.axes[0].autoscale_view()
+                        # HR/RMSSD更新
+                        if len(self.hr_buffer) > 0:
+                            hr_times = list(range(len(self.hr_buffer)))
+                            hrs = list(self.hr_buffer)
+                            rmssds = list(self.rmssd_buffer)
+                            
+                            self.lines[1].set_data(hr_times, hrs)
+                            self.lines[2].set_data(hr_times, rmssds)
+                            
+                            if len(hr_times) > 1:
+                                self.axes[1].set_xlim(0, len(hr_times))
+                                self.axes[2].set_xlim(0, len(hr_times))
                     
-                    if len(self.hr_buffer) > 0:
-                        # 心拍数とRMSSDプロット更新
-                        hr_times = list(range(len(self.hr_buffer)))
-                        hrs = list(self.hr_buffer)
-                        rmssds = list(self.rmssd_buffer)
-                        
-                        self.lines[1].set_data(hr_times, hrs)
-                        self.axes[1].relim()
-                        self.axes[1].autoscale_view()
-                        
-                        self.lines[2].set_data(hr_times, rmssds)
-                        self.axes[2].relim()
-                        self.axes[2].autoscale_view()
-                    
-                    self.fig.canvas.draw_idle()
-                    self.fig.canvas.flush_events()
+                    return self.lines
                 except:
-                    pass
+                    return self.lines
             
-            while plt.fignum_exists(self.fig.number) and self.running:
-                try:
-                    line = self.ser.readline().decode('utf-8', errors='ignore').strip()
-                    
-                    if not line:
-                        # 10回に1回だけプロット更新（負荷軽減）
-                        update_counter += 1
-                        if update_counter % 10 == 0:
-                            update_plot()
-                        plt.pause(0.001)
-                        continue
-                    
-                    # データモード開始検出
-                    if line.startswith('# Index'):
-                        in_data_mode = True
-                        self.session_id = self.db.create_session(notes='Live monitoring with plot')
-                        self.data_buffer = []
-                        print(f"\n[Session {self.session_id}] Data recording started")
-                        continue
-                    
-                    # データモード終了検出
-                    if 'Buffer cleared' in line:
-                        if in_data_mode and self.data_buffer:
-                            self._process_session()
-                        in_data_mode = False
-                        continue
-                    
-                    # データ行処理
-                    if in_data_mode:
-                        data = self.parse_csv_line(line)
-                        if data:
-                            self.data_buffer.append(data)
-                            
-                            # リアルタイムグラフ更新用
-                            self.time_buffer.append(data['timestamp'] / 1000.0)
-                            self.signal_buffer.append(data['filt_ir'])
-                            
-                            # 100サンプルごとにHR/RMSSD計算（1秒ごと）
-                            if len(self.data_buffer) % 100 == 0 and len(self.data_buffer) >= 300:
-                                recent_data = self.data_buffer[-300:]
-                                timestamps = np.array([d['timestamp'] for d in recent_data])
-                                signal_data = np.array([d['filt_ir'] for d in recent_data])
-                                
-                                try:
-                                    # 簡易HRV計算
-                                    std_signal = np.std(signal_data)
-                                    if std_signal > 1.0:  # 信号が存在する場合のみ
-                                        peaks = self.analyzer.detect_peaks(signal_data, min_distance=50, threshold=std_signal * 0.2)
-                                        
-                                        if len(peaks) >= 4:
-                                            rr_intervals, _ = self.analyzer.calculate_rr_intervals(peaks, timestamps)
-                                            
-                                            # クリーニング
-                                            valid_rr = rr_intervals[(rr_intervals >= 400) & (rr_intervals <= 1500)]
-                                            
-                                            if len(valid_rr) >= 3:
-                                                mean_rr = np.mean(valid_rr)
-                                                hr = 60000.0 / mean_rr if mean_rr > 0 else 0
-                                                
-                                                rr_diff = np.diff(valid_rr)
-                                                rmssd = np.sqrt(np.mean(rr_diff ** 2)) if len(rr_diff) > 0 else 0
-                                                
-                                                if 40 <= hr <= 120:  # 妥当な範囲のみ
-                                                    self.hr_buffer.append(hr)
-                                                    self.rmssd_buffer.append(rmssd)
-                                                    print(f"HR: {hr:.1f} bpm, RMSSD: {rmssd:.1f} ms")
-                                except Exception as e:
-                                    pass  # エラーは無視して継続
-                    
-                    # データ受信時のみプロット更新
-                    if in_data_mode and len(self.data_buffer) % 20 == 0:
-                        update_plot()
-                    
-                except Exception as e:
-                    print(f"Plot error: {e}")
-                    continue
+            # FuncAnimationで高速更新（blit=True）
+            anim = FuncAnimation(
+                self.fig, animate, interval=200, blit=True, cache_frame_data=False
+            )
+            
+            plt.show()
             
             print("\n\nStopping...")
             
@@ -758,12 +768,13 @@ class LiveMonitor:
             print("\n\nStopping...")
         except Exception as e:
             print(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self.running = False
+            time.sleep(0.5)  # スレッド終了待ち
             if self.ser and self.ser.is_open:
                 self.ser.close()
-            if self.fig:
-                plt.close(self.fig)
             self.db.close()
     
     def _process_session(self):
