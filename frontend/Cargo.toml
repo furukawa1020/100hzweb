@@ -1,0 +1,32 @@
+[package]
+name = "vasc_lab_frontend"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = { version = "0.6", features = ["csr"] }
+console_error_panic_hook = "0.1"
+gloo-net = "0.5" # WebSocket client
+gloo-timers = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+web-sys = { version = "0.3", features = [
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "WebSocket",
+    "MessageEvent",
+    "ErrorEvent",
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "Node",
+    "Performance",
+] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+nalgebra = "0.32" # Linear algebra for signal processing if needed, or stick to basic iterators
+ringbuf = "0.3" # Efficient ring buffer for 100Hz stream
