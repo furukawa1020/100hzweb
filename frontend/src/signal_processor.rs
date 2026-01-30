@@ -65,23 +65,26 @@ impl SignalProcessor {
     }
 
     /// Compute r(t) based on the VASC-LAB definition
-    /// r(t) = z(σ(t)) + |z(Δ(t))|
+    /// r(t) = Relative deviation from baseline.
+    /// Uses Z-scores if calibrated.
     fn compute_rt(&self) -> f64 {
-        let (mu, sigma) = self.compute_stats();
+        let (_mu, sigma) = self.compute_stats();
         let slope = self.compute_slope();
 
-        // Normalize (Z-score based on session calibration mu_0, sigma_0)
-        // Note: For r(t), we focus on relative changes.
-        // Simplified for now: just return raw sigma + abs(slope) scaled
-        // Ideally this needs the calibration values injected.
+        // If not calibrated (sigma_0 == 1.0 default), just return raw approximation
+        // If calibrated, return (sigma / sigma_0) + impact of slope
         
-        let z_sigma = if self.sigma_0 > 0.0 { (sigma - self.sigma_0) / self.sigma_0 } else { 0.0 };
-        // Slope unit is val/sec.
+        let normalized_sigma = if self.sigma_0 > 0.0001 { sigma / self.sigma_0 } else { sigma };
         
-        // For the paper: r(t) = Sigma + |Slope| (normalized)
-        // Returning raw metric sum for now, tuning needed downstream.
+        // Slope also needs scaling. Let's assume slope is significant if it's high relative to signal noise.
+        // For simple arousal proxy:
+        // r(t) = (Current Variance / Baseline Variance) + Weight * |Slope|
+        // If r(t) > 1.0, user is more aroused/active than baseline.
         
-        sigma + slope.abs() * 10.0 // Weight slope slightly more based on typical range
+        let rt = normalized_sigma + (slope.abs() * 100.0); // Heuristic weight for slope
+        
+        // Log occasionally if needed, or return raw.
+        rt
     }
 
     fn compute_stats(&self) -> (f64, f64) {
