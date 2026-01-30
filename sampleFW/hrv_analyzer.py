@@ -642,6 +642,13 @@ class LiveMonitor:
                     
                     # データストリーム開始検出
                     if '# Index' in line:
+                        # 新しいストリーム開始時にバッファをクリア
+                        with self.data_lock:
+                            self.data_buffer.clear()
+                            self.time_buffer.clear()
+                            self.signal_buffer.clear()
+                            self.hr_buffer.clear()
+                            self.rmssd_buffer.clear()
                         in_data_stream = True
                         print(f"\n[Data streaming started - graphs will update continuously]")
                         continue
