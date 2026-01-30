@@ -12,13 +12,17 @@ struct ServerMessage {
     seq: u32,
     ir: f64,
     red: f64,
+    #[serde(default)] // Handle optional fields if legacy firmware connects
+    filt_ir: Option<f64>, 
+    #[serde(default)]
+    filt_red: Option<f64>,
 }
 
 #[component]
 pub fn App() -> impl IntoView {
     // Signals for UI
     let (status, set_status) = create_signal("Disconnected".to_string());
-    let (latest_ir, set_latest_ir) = create_signal(0.0);
+    let (monitor_ir, set_monitor_ir) = create_signal(0.0); // Display value (Teacher's Waveform)
     let (latest_r, set_latest_r) = create_signal(0.0);
     
     // Processor State (Mutable inside a RefCell/Signal wrapper?)
@@ -43,9 +47,12 @@ pub fn App() -> impl IntoView {
             if let Ok(txt) = e.data().dyn_into::<js_sys::JsString>() {
                 let txt: String = txt.into();
                 if let Ok(msg) = serde_json::from_str::<ServerMessage>(&txt) {
-                    set_latest_ir.set(msg.ir);
+                    // Display: Prioritize Teacher's Waveform (filt_ir), fallback to Raw
+                    let display_val = msg.filt_ir.unwrap_or(msg.ir);
+                    set_monitor_ir.set(display_val);
                     
-                    // Process Signal
+                    // Logic: Use Raw IR for strict r(t) calculation (VASC-LAB Spec)
+                    // (Or should we use filt_ir? Spec 6.1 says Input: IR_raw. Stick to Raw.)
                     let mut proc = processor_clone.borrow_mut();
                     if let Some(r_val) = proc.process_sample(msg.ir) {
                         set_latest_r.set(r_val);
@@ -69,8 +76,8 @@ pub fn App() -> impl IntoView {
             <h1>"VASC-LAB Monitor"</h1>
             <div style="margin-bottom: 20px; padding: 10px; border: 1px solid #ccc;">
                 <strong>"Status: "</strong> {move || status.get()} <br/>
-                <strong>"Raw IR: "</strong> {move || format!("{:.0}", latest_ir.get())} <br/>
-                <strong>"r(t): "</strong> {move || format!("{:.4}", latest_r.get())}
+                <strong>"Waveform (Teacher's): "</strong> {move || format!("{:.2}", monitor_ir.get())} <br/>
+                <strong>"r(t) [Calc from Raw]: "</strong> {move || format!("{:.4}", latest_r.get())}
             </div>
             
             <div style="border: 1px solid #333; height: 200px; position: relative;">

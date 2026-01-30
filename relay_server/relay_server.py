@@ -50,8 +50,8 @@ def setup_logging():
     filename = f"{DATA_DIR}/session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     csv_file_handle = open(filename, 'w', newline='')
     current_csv_writer = csv.writer(csv_file_handle)
-    # Header: ServerTime, Sequence, IR, Red
-    current_csv_writer.writerow(["server_ts", "seq", "ir", "red"])
+    # Header: ServerTime, Sequence, IR, Red, FiltIR, FiltRed
+    current_csv_writer.writerow(["server_ts", "seq", "ir", "red", "filt_ir", "filt_red"])
     print(f"Logging to {filename}")
 
 async def serial_reader(port):
@@ -74,35 +74,34 @@ async def serial_reader(port):
                 if not line:
                     continue
                 
-                # Expected format: "S,seq,ir,red"
+                # Expected format: "S,seq,ir,red,filtIR,filtRed"
                 if line.startswith("S,"):
                     parts = line.split(',')
-                    if len(parts) == 4:
+                    if len(parts) >= 6: # S, seq, ir, raw, filtIR, filtRed
                         try:
                             seq = int(parts[1])
                             ir = int(parts[2])
                             red = int(parts[3])
+                            filt_ir = float(parts[4])
+                            filt_red = float(parts[5])
                             ts = time.time() # High resolution server time
                             
                             # 1. Log to CSV
                             if current_csv_writer:
-                                current_csv_writer.writerow([ts, seq, ir, red])
-                                # Flush periodically? OS usually handles it. 
-                                # For safety in crash, maybe flush every N lines, but for 100Hz 
-                                # we want to minimize IO latency. Let OS buffer.
+                                current_csv_writer.writerow([ts, seq, ir, red, filt_ir, filt_red])
                             
                             # 2. Broadcast via WebSocket
+                            # Including filtered values for frontend visualization
                             payload = json.dumps({
                                 "type": "sample",
                                 "ts": ts,
                                 "seq": seq,
                                 "ir": ir,
-                                "red": red
+                                "red": red,
+                                "filt_ir": filt_ir,
+                                "filt_red": filt_red
                             })
                             
-                            # We don't await broadcast here to avoid blocking reader loop?
-                            # asyncio.create_task(broadcast(payload)) 
-                            # -> better: simple await, it's fast enough.
                             await broadcast(payload)
 
                         except ValueError:
