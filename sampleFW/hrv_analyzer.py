@@ -513,14 +513,14 @@ class LiveMonitor:
         self.db = PPGDatabase(db_path)
         self.analyzer = HRVAnalyzer()
         self.session_id = None
-        self.data_buffer = []
+        self.data_buffer = deque(maxlen=6000)  # 最大60秒分（100Hz）
         self.show_plot = show_plot
         
-        # グラフ用データバッファ
-        self.time_buffer = deque(maxlen=500)
+        # グラフ用データバッファ（表示用に制限）
+        self.time_buffer = deque(maxlen=500)  # 最新5秒分のみ表示
         self.signal_buffer = deque(maxlen=500)
-        self.hr_buffer = deque(maxlen=100)
-        self.rmssd_buffer = deque(maxlen=100)
+        self.hr_buffer = deque(maxlen=100)  # 最新100個のHR値
+        self.rmssd_buffer = deque(maxlen=100)  # 最新100個のRMSSD値
         
         # リアルタイムプロット用
         self.fig = None
@@ -775,8 +775,8 @@ class LiveMonitor:
             
             def animate(frame):
                 current_time = time.time()
-                # 最低でも100ms間隔を保つ
-                if current_time - last_update[0] < 0.1:
+                # 最低でも200ms間隔を保つ（負荷軽減）
+                if current_time - last_update[0] < 0.2:
                     return self.lines
                 last_update[0] = current_time
                 
@@ -827,7 +827,7 @@ class LiveMonitor:
             # FuncAnimationで更新（blit無効化でより安定）
             anim = FuncAnimation(
                 self.fig, animate, 
-                interval=300,  # 300ms間隔（より安定）
+                interval=500,  # 500ms間隔（安定性重視）
                 blit=False,  # blitを無効化して安定性向上
                 cache_frame_data=False,
                 repeat=True
