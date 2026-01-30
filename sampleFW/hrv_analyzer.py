@@ -690,77 +690,137 @@ class LiveMonitor:
             print("Connected! Opening plot window...")
             print("Close plot window to stop")
             
+            # matplotlibバックエンド設定
+            import matplotlib
+            matplotlib.use('TkAgg')  # より安定したバックエンド
+            
             # プロット初期化
-            plt.style.use('fast')  # 高速描画モード
-            self.fig, self.axes = plt.subplots(3, 1, figsize=(12, 8))
-            self.fig.suptitle('PPGclip Real-time Monitor', fontsize=14)
+            plt.rcParams['path.simplify'] = True
+            plt.rcParams['path.simplify_threshold'] = 1.0
+            plt.rcParams['agg.path.chunksize'] = 10000
             
-            # サブプロット設定（blit用に背景を保存）
-            self.axes[0].set_title('Filtered IR Signal')
-            self.axes[0].set_ylabel('Amplitude')
-            self.axes[0].grid(True, alpha=0.3)
-            line1, = self.axes[0].plot([], [], 'b-', linewidth=0.8, animated=True)
+            self.fig = plt.figure(figsize=(14, 9))
+            self.fig.suptitle('PPGclip Real-time Monitor', fontsize=14, fontweight='bold')
             
-            self.axes[1].set_title('Heart Rate')
-            self.axes[1].set_ylabel('HR (bpm)')
-            self.axes[1].set_ylim(40, 120)
-            self.axes[1].grid(True, alpha=0.3)
-            line2, = self.axes[1].plot([], [], 'r-', linewidth=1.5, animated=True)
+            # グリッド配置
+            gs = self.fig.add_gridspec(3, 1, hspace=0.3)
             
-            self.axes[2].set_title('RMSSD (Heart Rate Variability)')
-            self.axes[2].set_xlabel('Time (s)')
-            self.axes[2].set_ylabel('RMSSD (ms)')
-            self.axes[2].set_ylim(0, 100)
-            self.axes[2].grid(True, alpha=0.3)
-            line3, = self.axes[2].plot([], [], 'g-', linewidth=1.5, animated=True)
+            # サブプロット1: フィルタ後信号（固定範囲）
+            ax1 = self.fig.add_subplot(gs[0, 0])
+            ax1.set_title('Filtered IR Signal', fontsize=11)
+            ax1.set_ylabel('Amplitude', fontsize=10)
+            ax1.set_ylim(-150, 150)  # 固定範囲で自動スケール無効化
+            ax1.grid(True, alpha=0.3, linewidth=0.5)
+            line1, = ax1.plot([], [], 'b-', linewidth=0.7)
             
+            # サブプロット2: 心拍数
+            ax2 = self.fig.add_subplot(gs[1, 0])
+            ax2.set_title('Heart Rate', fontsize=11)
+            ax2.set_ylabel('HR (bpm)', fontsize=10)
+            ax2.set_ylim(40, 120)
+            ax2.set_xlim(0, 100)
+            ax2.axhline(y=60, color='gray', linestyle='--', alpha=0.3, linewidth=0.5)
+            ax2.axhline(y=80, color='gray', linestyle='--', alpha=0.3, linewidth=0.5)
+            ax2.grid(True, alpha=0.3, linewidth=0.5)
+            line2, = ax2.plot([], [], 'r-', linewidth=1.2, marker='o', markersize=2)
+            
+            # サブプロット3: RMSSD
+            ax3 = self.fig.add_subplot(gs[2, 0])
+            ax3.set_title('RMSSD (Heart Rate Variability)', fontsize=11)
+            ax3.set_xlabel('Measurement Count', fontsize=10)
+            ax3.set_ylabel('RMSSD (ms)', fontsize=10)
+            ax3.set_ylim(0, 100)
+            ax3.set_xlim(0, 100)
+            ax3.axhline(y=20, color='gray', linestyle='--', alpha=0.3, linewidth=0.5)
+            ax3.axhline(y=50, color='gray', linestyle='--', alpha=0.3, linewidth=0.5)
+            ax3.grid(True, alpha=0.3, linewidth=0.5)
+            line3, = ax3.plot([], [], 'g-', linewidth=1.2, marker='s', markersize=2)
+            
+            self.axes = [ax1, ax2, ax3]
             self.lines = [line1, line2, line3]
             
-            plt.tight_layout()
-            self.fig.canvas.draw()
-            
-            # 背景を保存（blitting用）
-            backgrounds = [self.fig.canvas.copy_from_bbox(ax.bbox) for ax in self.axes]
+            # タイトルテキスト（データカウント表示用）
+            status_text = self.fig.text(0.02, 0.98, '', fontsize=9, 
+                                       verticalalignment='top', family='monospace')
             
             # データ読み取りスレッド開始
             reader_thread = threading.Thread(target=self._serial_reader_thread, daemon=True)
             reader_thread.start()
             
-            # アニメーション更新関数
+            # アニメーション更新関数（最適化版）
+            last_update = [0]  # ミュータブルなリストで共有
+            
             def animate(frame):
+                current_time = time.time()
+                # 最低でも100ms間隔を保つ
+                if current_time - last_update[0] < 0.1:
+                    return self.lines
+                last_update[0] = current_time
+                
                 try:
                     with self.data_lock:
-                        # 信号データ更新
-                        if len(self.time_buffer) > 0:
-                            times = list(self.time_buffer)
-                            signals = list(self.signal_buffer)
+                        # 信号データ更新（最新500点のみ）
+                        if len(self.time_buffer) > 10:
+                            times = np.array(list(self.time_buffer))
+                            signals = np.array(list(self.signal_buffer))
+                            
                             self.lines[0].set_data(times, signals)
-                            self.axes[0].relim()
-                            self.axes[0].autoscale_view(scaley=True, scalex=True)
+                            
+                            # X軸範囲のみ動的調整（Y軸は固定）
+                            if len(times) > 0:
+                                time_range = times[-1] - times[0]
+                                if time_range > 0:
+                                    ax1.set_xlim(times[0], times[-1])
                         
                         # HR/RMSSD更新
                         if len(self.hr_buffer) > 0:
-                            hr_times = list(range(len(self.hr_buffer)))
-                            hrs = list(self.hr_buffer)
-                            rmssds = list(self.rmssd_buffer)
+                            hr_count = len(self.hr_buffer)
+                            hr_times = np.arange(hr_count)
+                            hrs = np.array(list(self.hr_buffer))
+                            rmssds = np.array(list(self.rmssd_buffer))
                             
                             self.lines[1].set_data(hr_times, hrs)
                             self.lines[2].set_data(hr_times, rmssds)
                             
-                            if len(hr_times) > 1:
-                                self.axes[1].set_xlim(0, len(hr_times))
-                                self.axes[2].set_xlim(0, len(hr_times))
+                            # X軸を動的調整
+                            if hr_count > 1:
+                                ax2.set_xlim(0, max(100, hr_count))
+                                ax3.set_xlim(0, max(100, hr_count))
+                            
+                            # ステータス表示
+                            if len(self.data_buffer) > 0:
+                                latest_hr = hrs[-1] if len(hrs) > 0 else 0
+                                latest_rmssd = rmssds[-1] if len(rmssds) > 0 else 0
+                                status_text.set_text(
+                                    f'Samples: {len(self.data_buffer):5d} | '
+                                    f'HR: {latest_hr:5.1f} bpm | '
+                                    f'RMSSD: {latest_rmssd:5.1f} ms'
+                                )
                     
-                    return self.lines
-                except:
+                    return self.lines + [status_text]
+                except Exception as e:
                     return self.lines
             
-            # FuncAnimationで高速更新（blit=True）
+            # FuncAnimationで更新（blit無効化でより安定）
             anim = FuncAnimation(
-                self.fig, animate, interval=200, blit=True, cache_frame_data=False
+                self.fig, animate, 
+                interval=300,  # 300ms間隔（より安定）
+                blit=False,  # blitを無効化して安定性向上
+                cache_frame_data=False,
+                repeat=True
             )
             
-            plt.show()
+            # ウィンドウを最大化して表示
+            mng = plt.get_current_fig_manager()
+            try:
+                mng.window.state('zoomed')  # Windows
+            except:
+                try:
+                    mng.resize(*mng.window.maxsize())
+                except:
+                    pass
+            
+            plt.show(block=True)
             
             print("\n\nStopping...")
             
