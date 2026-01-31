@@ -109,7 +109,10 @@ pub fn App() -> impl IntoView {
                              "frame": format!("{:?}", eng.frame),
                              "difficulty": eng.difficulty,
                              "correct": eng.last_correct, // Need to expose this in PmdtEngine
-                             "rt_ms": eng.last_rt,        // Need this too
+                             "rt_ms": eng.last_rt,
+                             "physio_r": r_val,
+                             "vis_opacity": eng.visual_opacity,
+                             "vis_scale": eng.visual_scale,
                              "details": format!("score:{}", eng.score)
                          });
                          // Send via WS
