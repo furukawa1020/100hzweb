@@ -29,6 +29,7 @@ pub struct PmdtEngine {
     
     // Task Internal
     pub last_correct: bool,
+    pub last_rt: f64,
     pub total_trials: usize,
     rng: SmallRng,
     
@@ -55,6 +56,7 @@ impl PmdtEngine {
             visual_scale: 1.0,
             last_correct: false,
             total_trials: 0,
+            last_rt: 0.0,
             rng: SmallRng::seed_from_u64(seed),
             left_val: "".to_string(),
             right_val: "".to_string(),
@@ -142,6 +144,7 @@ impl PmdtEngine {
 
     fn conclude_trial(&mut self, correct: bool, ts: f64) {
         self.last_correct = correct;
+        self.last_rt = (ts - self.state_start_ts) * 1000.0; // Seconds to ms
         if correct {
             self.score += 10;
             self.combo += 1;
