@@ -22,6 +22,7 @@ pub fn App() -> impl IntoView {
     let (current_frame, set_current_frame) = create_signal("Neutral".to_string());
     let (status, set_status) = create_signal("Disconnected".to_string());
     let (latest_r, set_latest_r) = create_signal(0.0);
+    let (vis_jitter, set_vis_jitter) = create_signal(0.0);
 
     // Core Engines
     let engine = Rc::new(RefCell::new(PmdtEngine::new(42)));
@@ -43,6 +44,7 @@ pub fn App() -> impl IntoView {
                     let ir = msg["ir"].as_f64().unwrap_or(0.0);
                     let mut proc = processor_ws.borrow_mut();
                     let r_t = proc.process_sample(ir);
+                    set_latest_r.set(r_t);
                     
                     let mut eng = engine_ws.borrow_mut();
                     eng.update_parameters_based_on_frame(r_t);
@@ -94,6 +96,14 @@ pub fn App() -> impl IntoView {
         set_vis_scale.set(eng.visual_scale);
         set_current_frame.set(format!("{:?}", eng.frame));
 
+        // Jitter effect derived from arousal if in Threat frame
+        let arousal = latest_r.get_untracked();
+        if eng.frame == Frame::Threat && arousal > 0.5 {
+            set_vis_jitter.set((arousal * 8.0).min(15.0));
+        } else {
+            set_vis_jitter.set(0.0);
+        }
+
         // SCED Logging: Check if a trial just finished
         if eng.total_trials > prev_trials {
              let r_val = latest_r.get_untracked();
@@ -113,7 +123,7 @@ pub fn App() -> impl IntoView {
         }
 
         match eng.state {
-            TrialState::Idle => set_center_text.set("Press SPACE to Start".to_string()),
+            TrialState::Idle => set_center_text.set("SPACE TO START".to_string()),
             TrialState::Fixation => {
                 set_center_text.set("+".to_string());
                 set_left_text.set("".to_string());
@@ -125,34 +135,56 @@ pub fn App() -> impl IntoView {
                 set_right_text.set(eng.right_val.clone());
             }
             TrialState::Feedback => {
-                set_center_text.set(if eng.last_correct { "O" } else { "X" }.to_string());
+                set_center_text.set(if eng.last_correct { "CORRECT" } else { "MISS" }.to_string());
                 set_left_text.set("".to_string());
                 set_right_text.set("".to_string());
             }
         }
     }, std::time::Duration::from_millis(16));
 
-    view! { ... }
-}
-
     view! {
-        <div style="background: black; color: white; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: sans-serif;">
-            <div style="position: absolute; top: 10px; left: 10px; font-family: monospace;">
-                "Status: " {move || status.get()} <br/>
-                "Frame: " {move || current_frame.get()} <br/>
-                "r(t): " {move || format!("{:.3}", latest_r.get())} <br/>
-                "Score: " {move || score.get()} " | Combo: " {move || combo.get()}
+        <div style="background: black; color: white; height: 100vh; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: 'Inter', sans-serif; transition: background 0.5s;">
+            <div style="position: absolute; top: 20px; left: 20px; font-family: monospace; font-size: 0.9em; opacity: 0.7;">
+                "SYSTEM: VASC-LAB v1.0" <br/>
+                "STATUS: " {move || status.get()} <br/>
+                "FRAME: " <span style=move || if current_frame.get() == "Threat" { "color: #ff3333" } else if current_frame.get() == "Challenge" { "color: #33ff33" } else { "color: white" }>{move || current_frame.get()}</span> <br/>
+                "r(t): " {move || format!("{:.3}", latest_r.get())} 
+            </div>
+
+            <div style="position: absolute; top: 20px; right: 20px; text-align: right; font-family: monospace;">
+                "SCORE: " <span style="font-size: 1.5em; color: #fbff00;">{move || score.get()}</span> <br/>
+                "COMBO: " {move || combo.get()}
             </div>
             
-            <div style="font-size: 4em;">{move || center_text.get()}</div>
+            <div style=move || {
+                let j = vis_jitter.get();
+                format!("font-size: 5em; font-weight: bold; transition: 0.1s; transform: translate({}px, {}px); color: {};", 
+                    (rand::random::<f64>() - 0.5) * j,
+                    (rand::random::<f64>() - 0.5) * j,
+                    if center_text.get() == "MISS" { "#ff3333" } else if center_text.get() == "CORRECT" { "#33ff33" } else { "white" }
+                )
+            }>
+                {move || center_text.get()}
+            </div>
             
-            <div style=move || format!("display: flex; gap: 100px; font-size: {}em; opacity: {};", 3.0 * vis_scale.get(), vis_opacity.get())>
+            <div style=move || {
+                let j = vis_jitter.get();
+                format!(
+                    "display: flex; gap: 120px; font-size: {}em; opacity: {}; transform: scale({}) translate({}px, {}px); transition: 0.1s; filter: blur({}px);", 
+                    3.0 * vis_scale.get(), 
+                    vis_opacity.get(), 
+                    vis_scale.get(),
+                    (rand::random::<f64>() - 0.5) * j,
+                    (rand::random::<f64>() - 0.5) * j,
+                    if current_frame.get() == "Threat" { (1.0 - vis_opacity.get()) * 8.0 } else { 0.0 }
+                )
+            }>
                 <div>{move || left_text.get()}</div>
                 <div>{move || right_text.get()}</div>
             </div>
 
-            <div style="position: absolute; bottom: 20px; color: #555;">
-                "A: Left More | L: Right More | [1,2,3]: Switch Frame | C: Calibrate"
+            <div style="position: absolute; bottom: 30px; color: #444; font-size: 0.8em; letter-spacing: 0.1em; font-family: monospace;">
+                "A: LEFT | L: RIGHT | C: CALIBRATE | SPACE: START"
             </div>
         </div>
     }
