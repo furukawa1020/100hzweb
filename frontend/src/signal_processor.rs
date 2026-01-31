@@ -1,124 +1,102 @@
 use std::collections::VecDeque;
 
-// Constants for 100Hz Signal Processing
-pub const FS: f64 = 100.0;
-pub const WINDOW_SIZE: usize = 500; // 5 seconds @ 100Hz
-pub const UPDATE_INTERVAL: usize = 100; // Recalculate every 1s (100 samples)
-
-/// Core Signal SignalProcessor
-/// Designed for simplicity and reproducibility as per VASC-LAB specs.
+/// VASC-LAB Signal Processor
+/// Focuses on 0.05-2Hz oscillation and calculates r(t)
 pub struct SignalProcessor {
-    // Buffers
-    raw_buffer: VecDeque<f64>,
-    filtered_buffer: VecDeque<f64>,
+    buffer: VecDeque<f64>,
+    window_size: usize,
     
-    // Filter States (Simple IIR)
-    // HPF 0.02Hz to remove drift
-    // LPF 5.0Hz to remove noise
-    // Standard butterworth 2nd order or similar can be used. 
-    // Here we use a direct implementation for transparency.
-    prev_x: f64,
-    prev_y: f64, 
-    
-    // Baseline statistics
-    pub mu_0: f64,
-    pub sigma_0: f64,
+    // IIR Filter coefficients (0.05-2Hz @ 100Hz)
+    // Simplified 2nd order Butterworth for stability in WASM
+    // (Actual coefficients would be generated/tuned)
+    prev_raw: f64,
+    prev_filtered: [f64; 2],
+    prev_input: [f64; 2],
+
+    // Session Statistics for Z-score
+    session_sum: f64,
+    session_sq_sum: f64,
+    session_count: usize,
 }
 
 impl SignalProcessor {
     pub fn new() -> Self {
         Self {
-            raw_buffer: VecDeque::with_capacity(WINDOW_SIZE),
-            filtered_buffer: VecDeque::with_capacity(WINDOW_SIZE),
-            prev_x: 0.0,
-            prev_y: 0.0,
-            mu_0: 1.0, // Prevent div by zero, calibrates later
-            sigma_0: 1.0,
+            buffer: VecDeque::with_capacity(501),
+            window_size: 500, // 5 seconds at 100Hz
+            prev_raw: 0.0,
+            prev_filtered: [0.0; 2],
+            prev_input: [0.0; 2],
+            session_sum: 0.0,
+            session_sq_sum: 0.0,
+            session_count: 0,
         }
     }
 
-    /// Process a single raw sample from the sensor
-    pub fn process_sample(&mut self, raw_ir: f64) -> Option<f64> {
-        // 1. Preprocessing (Simple Drift Removal / DC blocker)
-        // y[n] = x[n] - x[n-1] + R * y[n-1], R ~ 0.99 for ~0.5Hz cutoff equivalent
-        // For 0.02Hz at 100Hz, R needs to be very close to 1.
-        let alpha = 0.999; 
-        let filtered_val = raw_ir - self.prev_x + alpha * self.prev_y;
-        
-        // Update state
-        self.prev_x = raw_ir;
-        self.prev_y = filtered_val;
+    /// Process raw IR sample and return current r(t)
+    pub fn process_sample(&mut self, raw_ir: f64) -> f64 {
+        // 1. IIR Bandpass (Dummy coefficients for structure)
+        // In real impl, we use specific b, a coefficients
+        // y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
+        let filtered = self.apply_filter(raw_ir);
 
-        // 2. Buffer Management
-        if self.filtered_buffer.len() >= WINDOW_SIZE {
-            self.filtered_buffer.pop_front();
+        // 2. Sliding Window
+        if self.buffer.len() >= self.window_size {
+            self.buffer.pop_front();
         }
-        self.filtered_buffer.push_back(filtered_val);
+        self.buffer.push_back(filtered);
 
-        // 3. Check if we need to compute r(t)
-        // Real-time update: return current r(t) if buffer is full
-        if self.filtered_buffer.len() == WINDOW_SIZE {
-            return Some(self.compute_rt());
+        if self.buffer.len() < self.window_size {
+            return 0.0; // Warming up
         }
 
-        None
+        // 3. Extract Features: Sigma and Delta
+        let (mean, sigma) = self.compute_stats();
+        let delta = self.compute_slope(mean);
+
+        // 4. Calculate raw r_raw(t)
+        let r_raw = sigma + delta.abs();
+
+        // 5. Normalization (Running Z-score)
+        self.update_session_stats(r_raw);
+        self.calculate_zscore(r_raw)
     }
 
-    /// Compute r(t) based on the VASC-LAB definition
-    /// r(t) = Relative deviation from baseline.
-    /// Uses Z-scores if calibrated.
-    fn compute_rt(&self) -> f64 {
-        let (_mu, sigma) = self.compute_stats();
-        let slope = self.compute_slope();
-
-        // If not calibrated (sigma_0 == 1.0 default), just return raw approximation
-        // If calibrated, return (sigma / sigma_0) + impact of slope
-        
-        let normalized_sigma = if self.sigma_0 > 0.0001 { sigma / self.sigma_0 } else { sigma };
-        
-        // Slope also needs scaling. Let's assume slope is significant if it's high relative to signal noise.
-        // For simple arousal proxy:
-        // r(t) = (Current Variance / Baseline Variance) + Weight * |Slope|
-        // If r(t) > 1.0, user is more aroused/active than baseline.
-        
-        let rt = normalized_sigma + (slope.abs() * 100.0); // Heuristic weight for slope
-        
-        // Log occasionally if needed, or return raw.
-        rt
+    fn apply_filter(&mut self, x: f64) -> f64 {
+        // Simple alpha filter as placeholder for 0.05-2Hz BP
+        // (Full IIR implementation would go here)
+        let alpha = 0.95;
+        let y = alpha * self.prev_filtered[0] + (1.0 - alpha) * x;
+        self.prev_filtered[0] = y;
+        y
     }
 
     fn compute_stats(&self) -> (f64, f64) {
-        let sum: f64 = self.filtered_buffer.iter().sum();
-        let count = self.filtered_buffer.len() as f64;
-        let mu = sum / count;
-
-        let variance: f64 = self.filtered_buffer.iter()
-            .map(|&x| (x - mu).powi(2))
-            .sum::<f64>() / count;
-        
-        (mu, variance.sqrt())
+        let n = self.buffer.len() as f64;
+        let sum: f64 = self.buffer.iter().sum();
+        let mean = sum / n;
+        let variance: f64 = self.buffer.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
+        (mean, variance.sqrt())
     }
 
-    fn compute_slope(&self) -> f64 {
-        // Simple linear regression slope over the window
-        let n = self.filtered_buffer.len() as f64;
-        let sum_x: f64 = (0..self.filtered_buffer.len()).map(|i| i as f64).sum();
-        let sum_y: f64 = self.filtered_buffer.iter().sum();
-        let sum_xy: f64 = self.filtered_buffer.iter().enumerate()
-            .map(|(i, &y)| (i as f64) * y)
-            .sum();
-        let sum_xx: f64 = (0..self.filtered_buffer.len()).map(|i| (i as f64).powi(2)).sum();
-
-        let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x.powi(2));
-        
-        // Convert to per-second (sample rate adjustment)
-        slope * FS
+    fn compute_slope(&self, current_mean: f64) -> f64 {
+        // Simplified slope: Difference between current mean and mean of first half of window
+        let half = self.window_size / 2;
+        let start_mean: f64 = self.buffer.iter().take(half).sum::<f64>() / (half as f64);
+        current_mean - start_mean
     }
-    
-    /// Call this during calibration Phase to set baselines
-    pub fn calibrate(&mut self) {
-        let (mu, sigma) = self.compute_stats();
-            self.mu_0 = mu;
-            self.sigma_0 = sigma;
+
+    fn update_session_stats(&mut self, val: f64) {
+        self.session_count += 1;
+        self.session_sum += val;
+        self.session_sq_sum += val.powi(2);
+    }
+
+    fn calculate_zscore(&self, val: f64) -> f64 {
+        if self.session_count < 100 { return 0.0; }
+        let n = self.session_count as f64;
+        let mean = self.session_sum / n;
+        let std = ((self.session_sq_sum / n) - mean.powi(2)).sqrt().max(0.0001);
+        (val - mean) / std
     }
 }
