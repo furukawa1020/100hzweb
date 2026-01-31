@@ -17,6 +17,8 @@ DATA_DIR = "data"
 connected_clients = set()
 current_csv_writer = None
 csv_file_handle = None
+current_event_writer = None
+event_file_handle = None
 
 async def broadcast(message):
     if not connected_clients:
@@ -24,10 +26,32 @@ async def broadcast(message):
     await asyncio.gather(*[client.send(message) for client in connected_clients], return_exceptions=True)
 
 async def handler(websocket):
+    global current_event_writer, event_file_handle
     print(f"Client connected: {websocket.remote_address}")
     connected_clients.add(websocket)
     try:
-        await websocket.wait_closed()
+        async for message in websocket:
+            try:
+                data = json.loads(message)
+                if data.get("type") == "log_event":
+                    if current_event_writer:
+                        ts = time.time()
+                        current_event_writer.writerow([
+                            ts,
+                            data.get("event_type", "unknown"),
+                            data.get("trial_id", ""),
+                            data.get("frame", ""),
+                            data.get("difficulty", ""),
+                            data.get("correct", ""),
+                            data.get("rt_ms", ""),
+                            data.get("physio_r", ""),
+                            data.get("vis_opacity", ""),
+                            data.get("vis_scale", ""),
+                            data.get("details", "")
+                        ])
+                        event_file_handle.flush()
+            except Exception as e:
+                print(f"Error handling event log: {e}")
     finally:
         connected_clients.remove(websocket)
         print(f"Client disconnected: {websocket.remote_address}")
@@ -53,6 +77,22 @@ def setup_logging():
     # Header: ServerTime, Sequence, IR, Red, FiltIR, FiltRed
     current_csv_writer.writerow(["server_ts", "seq", "ir", "red", "filt_ir", "filt_red"])
     print(f"Logging to {filename}")
+
+def setup_event_logging():
+    global current_event_writer, event_file_handle
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+    
+    filename = f"{DATA_DIR}/events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    event_file_handle = open(filename, 'w', newline='')
+    current_event_writer = csv.writer(event_file_handle)
+    # Header for SCED analysis
+    current_event_writer.writerow([
+        "server_ts", "event_type", "trial_id", "frame", 
+        "difficulty", "correct", "rt_ms", "physio_r", 
+        "vis_opacity", "vis_scale", "details"
+    ])
+    print(f"Event logging to {filename}")
 
 async def serial_reader(port):
     print(f"Opening serial port {port}...")
@@ -92,7 +132,7 @@ async def serial_reader(port):
                             
                             # 2. Broadcast via WebSocket
                             # Including filtered values for frontend visualization
-                            payload = json.dumps({
+                            payload_dict = {
                                 "type": "sample",
                                 "ts": ts,
                                 "seq": seq,
@@ -100,8 +140,7 @@ async def serial_reader(port):
                                 "red": red,
                                 "filt_ir": filt_ir,
                                 "filt_red": filt_red
-                            })
-                            
+                            }
                             await broadcast(json.dumps(payload_dict))
 
                         except (ValueError, IndexError):
@@ -121,7 +160,6 @@ async def main():
         # port = "COM3" 
         return
 
-    setup_logging()
     setup_logging()
     setup_event_logging()
 
