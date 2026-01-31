@@ -39,6 +39,8 @@ pub struct PmdtEngine {
     
     // Timing
     state_start_ts: f64,
+    last_frame_switch_ts: f64,
+    next_frame_switch_duration: f64,
 }
 
 impl PmdtEngine {
@@ -58,18 +60,38 @@ impl PmdtEngine {
             right_val: "".to_string(),
             correct_key: "".to_string(),
             state_start_ts: 0.0,
+            last_frame_switch_ts: 0.0,
+            next_frame_switch_duration: 120.0,
         }
     }
 
     pub fn start_session(&mut self, ts: f64) {
         self.total_trials = 0;
         self.score = 0;
+        self.combo = 0;
+        self.frame = Frame::Neutral;
+        self.state_start_ts = ts;
+        self.last_frame_switch_ts = ts;
+        self.next_frame_switch_duration = self.rng.gen_range(120.0..180.0);
         self.next_state(TrialState::Fixation, ts);
     }
 
     pub fn update(&mut self, ts: f64) {
         let elapsed = ts - self.state_start_ts;
         
+        // 1. Session-level Frame Management (120-180s Random Switch)
+        if self.state != TrialState::Idle {
+            let session_elapsed = ts - self.last_frame_switch_ts;
+            if session_elapsed > self.next_frame_switch_duration {
+                // Randomly switch frame (Neutral -> Threat or Challenge, etc.)
+                let frames = [Frame::Neutral, Frame::Threat, Frame::Challenge];
+                self.frame = *frames.choose(&mut self.rng).unwrap();
+                self.last_frame_switch_ts = ts;
+                self.next_frame_switch_duration = self.rng.gen_range(120.0..180.0);
+                web_sys::console::log_1(&format!("Frame switched to {:?}", self.frame).into());
+            }
+        }
+
         match self.state {
             TrialState::Fixation => {
                 if elapsed > 1.0 { // 1s fixation
@@ -78,8 +100,12 @@ impl PmdtEngine {
                 }
             }
             TrialState::Stimulus => {
-                // Timeout logic
-                let timeout = 2.0; // 2s default
+                // Timeout logic relative to r(t)
+                let timeout = match self.frame {
+                    Frame::Threat => 2.0 - (1.0 * self.difficulty).clamp(0.0, 1.5),
+                    Frame::Challenge => 2.0 + (2.0 * (1.0 - self.difficulty)).clamp(0.0, 3.0),
+                    _ => 2.0,
+                };
                 if elapsed > timeout {
                     self.conclude_trial(false, ts);
                 }
