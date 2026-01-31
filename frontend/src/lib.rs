@@ -24,40 +24,48 @@ pub fn App() -> impl IntoView {
     let engine = Rc::new(RefCell::new(PmdtEngine::new(42)));
     let processor = Rc::new(RefCell::new(SignalProcessor::new()));
 
-    // --- Key Event Handler ---
-    let engine_clone = engine.clone();
-    let processor_clone = processor.clone();
-    let window_obj = window().unwrap();
+    // --- WebSocket Integration ---
+    let (status, set_status) = create_signal("Disconnected".to_string());
+    let (latest_r, set_latest_r) = create_signal(0.0);
     
-    let key_handler = Closure::<dyn FnMut(_)>::new(move |ev: KeyboardEvent| {
-        let key = ev.key();
-        let ts = window().unwrap().performance().unwrap().now() / 1000.0;
-        let mut eng = engine_clone.borrow_mut();
+    let engine_ws = engine.clone();
+    let processor_ws = processor.clone();
+
+    spawn_local(async move {
+        let ws_url = "ws://localhost:8080";
+        let ws = WebSocket::new(ws_url).unwrap();
         
-        if key == " " && eng.state == TrialState::Idle {
-            eng.start_session(ts);
-        } else if key == "c" || key == "C" {
-            processor_clone.borrow_mut().calibrate();
-        } else if key == "1" { eng.frame = Frame::Neutral; }
-        else if key == "2" { eng.frame = Frame::Threat; }
-        else if key == "3" { eng.frame = Frame::Challenge; }
-        else {
-            eng.handle_input(&key, ts);
-        }
+        let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |ev: MessageEvent| {
+            if let Ok(txt) = ev.data().as_string() {
+                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) {
+                    if msg["type"] == "sample" {
+                        let ir = msg["ir"].as_f64().unwrap_or(0.0);
+                        
+                        // 1. Process Pulse
+                        let mut proc = processor_ws.borrow_mut();
+                        let r_t = proc.process_sample(ir);
+                        set_latest_r.set(r_t);
+                        
+                        // 2. Update Task Parameters
+                        let mut eng = engine_ws.borrow_mut();
+                        eng.update_parameters_based_on_frame(r_t);
+                    }
+                }
+            }
+        });
+        
+        ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
+        onmessage_callback.forget();
+        
+        let onopen = Closure::<dyn FnMut()>::new(move || set_status.set("Connected".to_string()));
+        ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        onopen.forget();
     });
 
-    window_obj.add_event_listener_with_callback("keydown", key_handler.as_ref().unchecked_ref()).unwrap();
-    key_handler.forget();
-
-    // --- High-Speed Update Loop (100Hz hypothetical or via WebSocket) ---
-    // For simplicity, we trigger updates via a timer if no WebSocket yet
+    // --- High-Speed UI Sync ---
     set_interval(move || {
         let ts = window().unwrap().performance().unwrap().now() / 1000.0;
         let mut eng = engine.borrow_mut();
-        
-        // Hypothetical r(t) injection (will be replaced by WebSocket)
-        let arousal = 0.0; // Placeholder
-        eng.update_parameters_based_on_frame(arousal);
         eng.update(ts);
 
         // Sync Signals
@@ -85,18 +93,20 @@ pub fn App() -> impl IntoView {
                 set_right_text.set("".to_string());
             }
         }
-    }, std::time::Duration::from_millis(10));
+    }, std::time::Duration::from_millis(16));
 
     view! {
         <div style="background: black; color: white; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: sans-serif;">
-            <div style="position: absolute; top: 10px; left: 10px;">
+            <div style="position: absolute; top: 10px; left: 10px; font-family: monospace;">
+                "Status: " {move || status.get()} <br/>
                 "Frame: " {move || current_frame.get()} <br/>
+                "r(t): " {move || format!("{:.3}", latest_r.get())} <br/>
                 "Score: " {move || score.get()} " | Combo: " {move || combo.get()}
             </div>
             
             <div style="font-size: 4em;">{move || center_text.get()}</div>
             
-            <div style=move || format!("display: flex; gap: 100px; font-size: {}em; opacity: {}; transition: 0.1s;", 3.0 * vis_scale.get(), vis_opacity.get())>
+            <div style=move || format!("display: flex; gap: 100px; font-size: {}em; opacity: {};", 3.0 * vis_scale.get(), vis_opacity.get())>
                 <div>{move || left_text.get()}</div>
                 <div>{move || right_text.get()}</div>
             </div>
