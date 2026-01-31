@@ -1,7 +1,23 @@
 mod pmdt;
 mod signal_processor;
+
+use leptos::*;
+use web_sys::{WebSocket, MessageEvent};
+use wasm_bindgen::prelude::*;
+use serde::{Deserialize, Serialize};
+
 use pmdt::{PmdtEngine, TrialState, Frame};
 use signal_processor::SignalProcessor;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ServerMessage {
+    pub ir: f64,
+    pub red: f64,
+    pub filt_ir: Option<f64>,
+    pub filt_red: Option<f64>,
+    pub seq: Option<u32>,
+}
+
 
 #[component]
 pub fn App() -> impl IntoView {
