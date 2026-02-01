@@ -1,9 +1,11 @@
 mod pmdt;
 mod signal_processor;
+mod audio;
 
 use leptos::*;
 use pmdt::{PmdtEngine, TrialState, Frame};
 use signal_processor::SignalProcessor;
+use audio::AudioManager;
 use web_sys::{window, MessageEvent, WebSocket};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,8 +13,40 @@ use wasm_bindgen::prelude::*;
 
 #[component]
 pub fn App() -> impl IntoView {
-    // Signals for UI updates
+    // ... (signals) ...
     let (score, set_score) = create_signal(0);
+    // ...
+    
+    // Core Engines
+    let engine = Rc::new(RefCell::new(PmdtEngine::new(42)));
+    let processor = Rc::new(RefCell::new(SignalProcessor::new()));
+    let audio = Rc::new(RefCell::new(AudioManager::new()));
+
+    // ... (WebSocket setup) ...
+
+    // --- High-Speed UI & Logging Sync ---
+    let engine_sync = engine.clone();
+    let ws_sync = ws.clone();
+    let audio_sync = audio.clone();
+    
+    set_interval(move || {
+        let ts = window().unwrap().performance().unwrap().now() / 1000.0;
+        let mut eng = engine_sync.borrow_mut();
+        let prev_trials = eng.total_trials;
+        
+        eng.update(ts);
+
+        // Sync Signals
+        set_score.set(eng.score);
+        // ... (rest of sync) ...
+
+        // Audio Feedback (Use existing r(t))
+        let arousal = latest_r.get_untracked();
+        if eng.state == TrialState::Stimulus {
+             audio_sync.borrow_mut().play_beat(arousal);
+        }
+        
+        // ... (logging and UI logic) ...
     let (combo, set_combo) = create_signal(0);
     let (center_text, set_center_text) = create_signal("Press SPACE to Start".to_string());
     let (left_text, set_left_text) = create_signal("".to_string());
