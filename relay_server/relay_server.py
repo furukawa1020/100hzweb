@@ -32,7 +32,6 @@ async def handler(websocket):
     try:
         async for message in websocket:
             try:
-            try:
                 data = json.loads(message)
                 
                 # 1. Subject ID Setup
