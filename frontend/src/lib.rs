@@ -13,40 +13,8 @@ use wasm_bindgen::prelude::*;
 
 #[component]
 pub fn App() -> impl IntoView {
-    // ... (signals) ...
+    // Signals for UI updates
     let (score, set_score) = create_signal(0);
-    // ...
-    
-    // Core Engines
-    let engine = Rc::new(RefCell::new(PmdtEngine::new(42)));
-    let processor = Rc::new(RefCell::new(SignalProcessor::new()));
-    let audio = Rc::new(RefCell::new(AudioManager::new()));
-
-    // ... (WebSocket setup) ...
-
-    // --- High-Speed UI & Logging Sync ---
-    let engine_sync = engine.clone();
-    let ws_sync = ws.clone();
-    let audio_sync = audio.clone();
-    
-    set_interval(move || {
-        let ts = window().unwrap().performance().unwrap().now() / 1000.0;
-        let mut eng = engine_sync.borrow_mut();
-        let prev_trials = eng.total_trials;
-        
-        eng.update(ts);
-
-        // Sync Signals
-        set_score.set(eng.score);
-        // ... (rest of sync) ...
-
-        // Audio Feedback (Use existing r(t))
-        let arousal = latest_r.get_untracked();
-        if eng.state == TrialState::Stimulus {
-             audio_sync.borrow_mut().play_beat(arousal);
-        }
-        
-        // ... (logging and UI logic) ...
     let (combo, set_combo) = create_signal(0);
     let (center_text, set_center_text) = create_signal("Press SPACE to Start".to_string());
     let (left_text, set_left_text) = create_signal("".to_string());
@@ -61,6 +29,7 @@ pub fn App() -> impl IntoView {
     // Core Engines
     let engine = Rc::new(RefCell::new(PmdtEngine::new(42)));
     let processor = Rc::new(RefCell::new(SignalProcessor::new()));
+    let audio = Rc::new(RefCell::new(AudioManager::new()));
 
     // Shared WebSocket (wrapped in Rc for closure access)
     let ws_url = "ws://localhost:8080";
@@ -135,6 +104,8 @@ pub fn App() -> impl IntoView {
     // --- High-Speed UI & Logging Sync ---
     let engine_sync = engine.clone();
     let ws_sync = ws.clone();
+    let audio_sync = audio.clone();
+
     set_interval(move || {
         let ts = window().unwrap().performance().unwrap().now() / 1000.0;
         let mut eng = engine_sync.borrow_mut();
@@ -149,8 +120,13 @@ pub fn App() -> impl IntoView {
         set_vis_scale.set(eng.visual_scale);
         set_current_frame.set(format!("{:?}", eng.frame));
 
-        // Jitter effect derived from arousal if in Threat frame
+        // Audio Feedback
         let arousal = latest_r.get_untracked();
+        if eng.state == TrialState::Stimulus {
+             audio_sync.borrow_mut().play_beat(arousal);
+        }
+
+        // Jitter effect derived from arousal if in Threat frame
         if eng.frame == Frame::Threat && arousal > 0.5 {
             set_vis_jitter.set((arousal * 8.0).min(15.0));
         } else {
@@ -204,7 +180,7 @@ pub fn App() -> impl IntoView {
     view! {
         <div style="background: black; color: white; height: 100vh; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: 'Inter', sans-serif; transition: background 0.5s;">
             <div style="position: absolute; top: 20px; left: 20px; font-family: monospace; font-size: 0.9em; opacity: 0.7;">
-                "SYSTEM: VASC-LAB v1.1" <br/>
+                "SYSTEM: VASC-LAB v1.2" <br/>
                 "STATUS: " {move || status.get()} <br/>
                 "FRAME: " <span style=move || if current_frame.get() == "Threat" { "color: #ff3333" } else if current_frame.get() == "Challenge" { "color: #33ff33" } else { "color: white" }>{move || current_frame.get()}</span> <br/>
                 "r(t): " {move || format!("{:.3}", latest_r.get())} <br/>
