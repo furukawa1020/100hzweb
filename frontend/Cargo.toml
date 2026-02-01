@@ -25,6 +25,11 @@ web-sys = { version = "0.3", features = [
     "HtmlElement",
     "Node",
     "Performance",
+    "AudioContext",
+    "OscillatorNode",
+    "GainNode",
+    "AudioDestinationNode",
+    "AudioParam",
 ] }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
