@@ -25,6 +25,10 @@ pub fn App() -> impl IntoView {
     let (status, set_status) = create_signal("Disconnected".to_string());
     let (latest_r, set_latest_r) = create_signal(0.0);
     let (vis_jitter, set_vis_jitter) = create_signal(0.0);
+    
+    // Stats Signals
+    let (acc_str, set_acc_str) = create_signal("---".to_string());
+    let (rt_str, set_rt_str) = create_signal("---".to_string());
 
     // Core Engines
     let engine = Rc::new(RefCell::new(PmdtEngine::new(42)));
@@ -119,6 +123,14 @@ pub fn App() -> impl IntoView {
         set_vis_opacity.set(eng.visual_opacity);
         set_vis_scale.set(eng.visual_scale);
         set_current_frame.set(format!("{:?}", eng.frame));
+        
+        // Stats
+        if eng.total_trials > 0 {
+            set_acc_str.set(format!("{:.1}%", (eng.score as f64 / eng.total_trials as f64) * 100.0));
+        }
+        if eng.last_rt > 0.0 {
+            set_rt_str.set(format!("{:.0} ms", eng.last_rt));
+        }
 
         // Audio Feedback
         let arousal = latest_r.get_untracked();
@@ -215,22 +227,8 @@ pub fn App() -> impl IntoView {
                 "SCORE: " <span style="font-size: 1.5em; color: #fbff00;">{move || score.get()}</span> <br/>
                 "COMBO: " {move || combo.get()} <br/>
                 <div style="margin-top: 10px; font-size: 0.8em; color: #aaa;">
-                    "ACC: " {move || {
-                        let eng = engine_sync.borrow();
-                        if eng.total_trials > 0 {
-                            format!("{:.1}%", (eng.score as f64 / eng.total_trials as f64) * 100.0)
-                        } else {
-                            "---".to_string()
-                        }
-                    }} <br/>
-                    "RT: " {move || {
-                        let eng = engine_sync.borrow();
-                        if eng.last_rt > 0.0 {
-                            format!("{:.0} ms", eng.last_rt)
-                        } else {
-                           "---".to_string()
-                        }
-                    }}
+                    "ACC: " {move || acc_str.get()} <br/>
+                    "RT: " {move || rt_str.get()}
                 </div>
             </div>
             
