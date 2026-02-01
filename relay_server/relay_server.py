@@ -32,8 +32,19 @@ async def handler(websocket):
     try:
         async for message in websocket:
             try:
+            try:
                 data = json.loads(message)
-                if data.get("type") == "log_event":
+                
+                # 1. Subject ID Setup
+                if data.get("type") == "set_subject_id":
+                    sid = data.get("subject_id", "test")
+                    print(f"Setting Subject ID: {sid}")
+                    # Re-initialize logging with new filename
+                    setup_logging(sid)
+                    setup_event_logging(sid)
+                
+                # 2. Event Logging
+                elif data.get("type") == "log_event":
                     if current_event_writer:
                         ts = time.time()
                         current_event_writer.writerow([
@@ -51,7 +62,7 @@ async def handler(websocket):
                         ])
                         event_file_handle.flush()
             except Exception as e:
-                print(f"Error handling event log: {e}")
+                print(f"Error handling message: {e}")
     finally:
         connected_clients.remove(websocket)
         print(f"Client disconnected: {websocket.remote_address}")
@@ -66,24 +77,32 @@ def find_m5atom_port():
             return p.device
     return None
 
-def setup_logging():
+def setup_logging(subject_id="default"):
     global current_csv_writer, csv_file_handle
+    
+    if csv_file_handle:
+        csv_file_handle.close()
+
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
     
-    filename = f"{DATA_DIR}/session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    filename = f"{DATA_DIR}/{subject_id}_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     csv_file_handle = open(filename, 'w', newline='')
     current_csv_writer = csv.writer(csv_file_handle)
     # Header: ServerTime, Sequence, IR, Red, FiltIR, FiltRed
     current_csv_writer.writerow(["server_ts", "seq", "ir", "red", "filt_ir", "filt_red"])
-    print(f"Logging to {filename}")
+    print(f"Raw logging to {filename}")
 
-def setup_event_logging():
+def setup_event_logging(subject_id="default"):
     global current_event_writer, event_file_handle
+    
+    if event_file_handle:
+        event_file_handle.close()
+
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
     
-    filename = f"{DATA_DIR}/events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    filename = f"{DATA_DIR}/{subject_id}_events_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     event_file_handle = open(filename, 'w', newline='')
     current_event_writer = csv.writer(event_file_handle)
     # Header for SCED analysis
