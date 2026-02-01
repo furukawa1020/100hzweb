@@ -19,25 +19,53 @@ if (-not (Test-Command "trunk")) {
     $env:PATH += ";$env:USERPROFILE\.cargo\bin"
     
     if (-not (Test-Command "trunk")) {
-        Write-Warning "Trunk not found."
-        if (Test-Command "cargo") {
-            Write-Host "Cargo found. Attempting to install Trunk automatically..." -ForegroundColor Yellow
-            Write-Host "(This make take 1-2 minutes to compile)" -ForegroundColor Gray
-            cargo install trunk
-            
-            # Re-check
-            if (-not (Test-Command "trunk")) {
-                Write-Error "Trunk install failed. Please run 'cargo install trunk' manually."
+        Write-Warning "Trunk not found in Cargo/Bin."
+        
+        # Create a local tools directory
+        $ToolsDir = Join-Path $PWD "tools"
+        if (-not (Test-Path $ToolsDir)) {
+            New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+        }
+        $env:PATH += ";$ToolsDir"
+        
+        if (Test-Command "trunk") {
+            Write-Host "Trunk found in local tools." -ForegroundColor Green
+        }
+        else {
+            Write-Host "Downloading pre-built Trunk binary (to avoid compilation errors)..." -ForegroundColor Yellow
+             
+            # URL for Trunk v0.20.1 (Stable, Windows)
+            $AppveyorUrl = "https://github.com/trunk-rs/trunk/releases/download/v0.20.1/trunk-x86_64-pc-windows-msvc.zip"
+            $ZipPath = Join-Path $ToolsDir "trunk.zip"
+             
+            try {
+                # Security Protocol fix for older PS versions
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+                Invoke-WebRequest -Uri $AppveyorUrl -OutFile $ZipPath
+                Expand-Archive -Path $ZipPath -DestinationPath $ToolsDir -Force
+                Remove-Item $ZipPath
+                
+                # Check again
+                if (-not (Test-Path (Join-Path $ToolsDir "trunk.exe"))) {
+                    throw "Extraction failed."
+                }
+                Write-Host "Trunk installed successfully to $ToolsDir" -ForegroundColor Green
+            }
+            catch {
+                Write-Error "Failed to download trunk: $_"
+                Write-Host "Manual Install: cargo install trunk"
                 Read-Host "Press Enter to exit..."
                 exit 1
             }
         }
-        else {
-            Write-Error "Cargo (Rust) not found. Please install Rust first: https://rustup.rs/"
-            Read-Host "Press Enter to exit..."
-            exit 1
-        }
     }
+}
+
+# 2.5 Ensure WASM Target
+if (Test-Command "rustup") {
+    Write-Host "Checking WASM target..." -ForegroundColor Gray
+    rustup target add wasm32-unknown-unknown
 }
 
 # 3. Start Relay Server (in new window)
