@@ -59,15 +59,34 @@ pub fn App() -> impl IntoView {
     ws_recv.set_onopen(Some(onopen.as_ref().unchecked_ref()));
     onopen.forget();
 
+    let (subject_id, set_subject_id) = create_signal("P001".to_string());
+    
+    // Graph History (Store last 100 points for visualization)
+    let (r_history, set_r_history) = create_signal(vec![0.0; 100]);
+
     // --- Key Events ---
     let engine_kb = engine.clone();
     let proc_kb = processor.clone();
+    let ws_kb = ws.clone();
+    
     window_event_listener(ev::keydown, move |ev| {
         let key = ev.key();
         let ts = window().unwrap().performance().unwrap().now() / 1000.0;
         let mut eng = engine_kb.borrow_mut();
         
+        // Prevent default for Space to avoid scrolling
+        if key == " " {
+            ev.prevent_default();
+        }
+
         if key == " " && eng.state == TrialState::Idle {
+            // Start Session: Send Subject ID
+            let sid_msg = serde_json::json!({
+                "type": "set_subject_id",
+                "subject_id": subject_id.get_untracked()
+            });
+            let _ = ws_kb.send_with_str(&sid_msg.to_string());
+            
             eng.start_session(ts);
         } else if key == "c" || key == "C" {
             proc_kb.borrow_mut().calibrate();
@@ -103,6 +122,12 @@ pub fn App() -> impl IntoView {
         } else {
             set_vis_jitter.set(0.0);
         }
+        
+        // Update Graph History
+        set_r_history.update(|hist| {
+            hist.push(arousal);
+            if hist.len() > 100 { hist.remove(0); }
+        });
 
         // SCED Logging: Check if a trial just finished
         if eng.total_trials > prev_trials {
@@ -145,10 +170,35 @@ pub fn App() -> impl IntoView {
     view! {
         <div style="background: black; color: white; height: 100vh; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: 'Inter', sans-serif; transition: background 0.5s;">
             <div style="position: absolute; top: 20px; left: 20px; font-family: monospace; font-size: 0.9em; opacity: 0.7;">
-                "SYSTEM: VASC-LAB v1.0" <br/>
+                "SYSTEM: VASC-LAB v1.1" <br/>
                 "STATUS: " {move || status.get()} <br/>
                 "FRAME: " <span style=move || if current_frame.get() == "Threat" { "color: #ff3333" } else if current_frame.get() == "Challenge" { "color: #33ff33" } else { "color: white" }>{move || current_frame.get()}</span> <br/>
-                "r(t): " {move || format!("{:.3}", latest_r.get())} 
+                "r(t): " {move || format!("{:.3}", latest_r.get())} <br/>
+                
+                // Subject ID Input
+                <div style="margin-top: 10px; display: flex; align-items: center; gap: 5px;">
+                    "ID: "
+                    <input 
+                        type="text" 
+                        prop:value=move || subject_id.get()
+                        on:input=move |ev| set_subject_id.set(event_target_value(&ev))
+                        style="background: #333; color: white; border: 1px solid #555; padding: 2px 5px; width: 60px;"
+                    />
+                </div>
+                
+                // Real-time Graph (Simple SVG)
+                <svg width="200" height="60" style="background: #111; border: 1px solid #333; margin-top: 5px;">
+                    <polyline
+                        points=move || {
+                            r_history.get().iter().enumerate()
+                                .map(|(i, &r)| format!("{},{}", i * 2, 60.0 - (r * 10.0 + 30.0).clamp(0.0, 60.0)))
+                                .collect::<Vec<_>>().join(" ")
+                        }
+                        fill="none"
+                        stroke="#00ffcc"
+                        stroke-width="2"
+                    />
+                </svg>
             </div>
 
             <div style="position: absolute; top: 20px; right: 20px; text-align: right; font-family: monospace;">
