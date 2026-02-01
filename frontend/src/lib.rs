@@ -213,7 +213,25 @@ pub fn App() -> impl IntoView {
 
             <div style="position: absolute; top: 20px; right: 20px; text-align: right; font-family: monospace;">
                 "SCORE: " <span style="font-size: 1.5em; color: #fbff00;">{move || score.get()}</span> <br/>
-                "COMBO: " {move || combo.get()}
+                "COMBO: " {move || combo.get()} <br/>
+                <div style="margin-top: 10px; font-size: 0.8em; color: #aaa;">
+                    "ACC: " {move || {
+                        let eng = engine_sync.borrow();
+                        if eng.total_trials > 0 {
+                            format!("{:.1}%", (eng.score as f64 / eng.total_trials as f64) * 100.0)
+                        } else {
+                            "---".to_string()
+                        }
+                    }} <br/>
+                    "RT: " {move || {
+                        let eng = engine_sync.borrow();
+                        if eng.last_rt > 0.0 {
+                            format!("{:.0} ms", eng.last_rt)
+                        } else {
+                           "---".to_string()
+                        }
+                    }}
+                </div>
             </div>
             
             <div style=move || {
