@@ -91,6 +91,11 @@ Start-Process powershell -ArgumentList "-NoExit", "-Command", "& { python relay_
 Write-Host "Building Frontend (Diagnostic Mode)..." -ForegroundColor Cyan
 Write-Host "Please wait. If this fails, we will see the error here." -ForegroundColor Gray
 
+# FIX: Move build artifacts out of OneDrive to prevent "Access Denied" / Linker errors
+$TempBuildDir = Join-Path $env:TEMP "vasc_lab_build"
+Write-Host "Redirecting build artifacts to: $TempBuildDir" -ForegroundColor Gray
+$env:CARGO_TARGET_DIR = $TempBuildDir
+
 # Use local trunk if exists
 $TrunkCmd = if (Test-Path "tools\trunk.exe") { "..\tools\trunk.exe" } else { "trunk" }
 
