@@ -87,12 +87,45 @@ if (Test-Command "rustup") {
 Write-Host "Launching Relay Server..." -ForegroundColor Green
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "& { python relay_server/relay_server.py }"
 
-# 4. Start Frontend (in new window)
-Write-Host "Launching Frontend..." -ForegroundColor Green
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "& { cd frontend; trunk serve --address 127.0.0.1 --port 8080 --open }"
+# 4. Build and Start Frontend
+Write-Host "Building Frontend (Diagnostic Mode)..." -ForegroundColor Cyan
+Write-Host "Please wait. If this fails, we will see the error here." -ForegroundColor Gray
+
+# Use local trunk if exists
+$TrunkCmd = if (Test-Path "tools\trunk.exe") { "..\tools\trunk.exe" } else { "trunk" }
+
+Set-Location frontend
+try {
+    # Run build synchronously to check for errors
+    # We use Invoke-Expression to handle the command string with arguments correctly
+    if (Test-Path "..\tools\trunk.exe") {
+        & "..\tools\trunk.exe" build
+    }
+    else {
+        trunk build
+    }
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Build Successful! Launching Server..." -ForegroundColor Green
+        Start-Process powershell -ArgumentList "-NoExit", "-Command", "& { $TrunkCmd serve --address 127.0.0.1 --port 8080 --open }"
+    }
+    else {
+        Write-Error "Build Failed. Please check the error messages above."
+        Read-Host "Press Enter to exit..."
+        exit 1
+    }
+}
+catch {
+    Write-Error "An error occurred during build: $_"
+    Read-Host "Press Enter to exit..."
+    exit 1
+}
+finally {
+    Set-Location ..
+}
 
 Write-Host "System Launching..."
 Write-Host "1. Relay Server window should appear."
-Write-Host "2. Frontend window should appear and open Browser."
+Write-Host "2. Browser should open."
 
 Read-Host "Press Enter to close this launcher..."
