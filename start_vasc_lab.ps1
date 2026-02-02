@@ -62,9 +62,24 @@ if (-not (Test-Command "trunk")) {
     }
 }
 
-# 2.5 Ensure WASM Target
+# 2.5 Ensure Correct Toolchain (Fix for missing VS Build Tools)
 if (Test-Command "rustup") {
-    Write-Host "Checking WASM target..." -ForegroundColor Gray
+    Write-Host "Checking Rust Environment..." -ForegroundColor Gray
+    
+    # Check if link.exe exists (MSVC requirement)
+    if (-not (Test-Command "link.exe")) {
+        Write-Warning "Visual Studio Build Tools (link.exe) not found."
+        Write-Host "Switching to GNU toolchain to avoid massive download..." -ForegroundColor Yellow
+        
+        # Install GNU toolchain
+        rustup toolchain install stable-x86_64-pc-windows-gnu
+        rustup default stable-x86_64-pc-windows-gnu
+        
+        Write-Host "Toolchain switched to GNU. Retrying setup..." -ForegroundColor Green
+    }
+
+    # Ensure WASM Target
+    Write-Host "Ensuring WASM target..." -ForegroundColor Gray
     rustup target add wasm32-unknown-unknown
 }
 
@@ -74,7 +89,7 @@ Start-Process powershell -ArgumentList "-NoExit", "-Command", "& { python relay_
 
 # 4. Start Frontend (in new window)
 Write-Host "Launching Frontend..." -ForegroundColor Green
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "& { cd frontend; trunk serve --open }"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "& { cd frontend; trunk serve --address 127.0.0.1 --port 8080 --open }"
 
 Write-Host "System Launching..."
 Write-Host "1. Relay Server window should appear."
