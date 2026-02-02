@@ -47,6 +47,6 @@ impl AudioManager {
         let now = self.ctx.current_time();
         gain.gain().set_value_at_time(0.1, now).unwrap();
         gain.gain().exponential_ramp_to_value_at_time(0.001, now + duration).unwrap();
-        osc.stop_with_seconds(now + duration + 0.1).unwrap();
+        osc.stop_with_f64(now + duration + 0.1).unwrap();
     }
 }

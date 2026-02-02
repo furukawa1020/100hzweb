@@ -45,7 +45,7 @@ pub fn App() -> impl IntoView {
     let ws_recv = ws.clone();
     
     let onmessage_callback = Closure::<dyn FnMut(_)>::new(move |ev: MessageEvent| {
-        if let Ok(txt) = ev.data().as_string() {
+        if let Some(txt) = ev.data().as_string() {
             if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&txt) {
                 if msg["type"] == "sample" {
                     let ir = msg["ir"].as_f64().unwrap_or(0.0);
