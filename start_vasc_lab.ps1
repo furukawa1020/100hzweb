@@ -96,8 +96,22 @@ $TrunkCmd = if (Test-Path "tools\trunk.exe") { "..\tools\trunk.exe" } else { "tr
 
 Set-Location frontend
 try {
+    # 0. Kill stale trunk processes (Fix for Access Denied)
+    Get-Process trunk -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Milliseconds 500
+
+    # 1. Force clean dist directory
+    if (Test-Path "dist") {
+        Write-Host "Cleaning dist directory..." -ForegroundColor Gray
+        Remove-Item -Path "dist" -Recurse -Force -ErrorAction SilentlyContinue
+        # Retry once if failed
+        if (Test-Path "dist") {
+            Start-Sleep -Milliseconds 1000
+            Remove-Item -Path "dist" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     # Run build synchronously to check for errors
-    # We use Invoke-Expression to handle the command string with arguments correctly
     if (Test-Path "..\tools\trunk.exe") {
         & "..\tools\trunk.exe" build
     }
